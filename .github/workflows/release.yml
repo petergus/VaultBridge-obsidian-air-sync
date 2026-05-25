@@ -1,34 +1,43 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "*"
+    push:
+        tags:
+            - "*"
 
 permissions:
-  contents: write
+    contents: write
+    id-token: write
+    attestations: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
 
-      - run: npm ci
+            - run: npm ci
 
-      - run: npm run build
-        env:
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+            - run: npm run build
+              env:
+                  GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+                  GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          files: |
-            main.js
-            manifest.json
-            styles.css
+            - uses: actions/attest-build-provenance@v2
+              with:
+                  subject-path: |
+                      main.js
+                      manifest.json
+                      styles.css
+
+            - uses: softprops/action-gh-release@v2
+              with:
+                  draft: false
+                  files: |
+                      main.js
+                      manifest.json
+                      styles.css
