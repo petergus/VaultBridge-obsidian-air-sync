@@ -3,7 +3,8 @@ import type { Logger } from "../../logging/logger";
 import type { RemoteVaultResolution, RemoteVaultMetadata } from "../../sync/remote-vault";
 import { REMOTE_VAULT_ROOT } from "../../sync/remote-vault";
 import { FOLDER_MIME } from "./types";
-import { AIRSYNC_DIR } from "../../constants";
+
+const AIRSYNC_DIR = ".airsync";
 const METADATA_FILE = "metadata.json";
 
 /**
