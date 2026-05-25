@@ -91,7 +91,7 @@ async function keepNewer(
 	localFs: IFileSystem,
 	remoteFs: IFileSystem,
 	local?: FileEntity,
-	remote?: FileEntity
+	remote?: FileEntity,
 ): Promise<ConflictResolutionResult> {
 	// If one side is deleted, the other side wins
 	if (!local && remote) {
@@ -113,11 +113,13 @@ async function keepNewer(
 			return keepRemote(path, localFs, remoteFs, remote);
 		}
 	}
-	// Same mtime or unknown mtime: compare by hash — if identical content, keep local; otherwise duplicate
-	if (local!.hash && remote!.hash && local!.hash === remote!.hash) {
+	// Same mtime or unknown mtime: compare by content hash — if identical, keep local; otherwise tieBreak.
+	// Remote FileEntity.hash is "" for backends that don't compute it on list/stat (e.g. Google Drive);
+	// fall back to backendMeta.contentChecksum in that case.
+	if (sameContent(local!, remote!)) {
 		return keepLocal(path, localFs, remoteFs, local); // content identical
 	}
-	return duplicate(path, localFs, remoteFs, local, remote); // safe fallback
+	return duplicate(path, localFs, remoteFs, local, remote);
 }
 
 async function duplicate(
@@ -200,6 +202,9 @@ async function attemptThreeWayMerge(
 	fallback: FallbackResolver = "keep_newer",
 ): Promise<ConflictResolutionResult> {
 	const { path, localFs, remoteFs, local, remote, prevSync, stateStore, logger } = ctx;
+	const tag = "auto_merge";
+
+	logger?.debug(`${tag}: attempting 3-way merge`, { path });
 
 	const resolveFallback = async (): Promise<ResolverStrategy> => {
 		return typeof fallback === "function" ? await fallback() : fallback;
@@ -208,6 +213,12 @@ async function attemptThreeWayMerge(
 	// Must have both sides present and a previous sync record
 	if (!local || !remote || !prevSync) {
 		const fb = await resolveFallback();
+		logger?.warn(`${tag}: falling back — missing prerequisites`, {
+			path,
+			strategy: tag,
+			reason: `missing: ${[!local && "local", !remote && "remote", !prevSync && "prevSync"].filter(Boolean).join(", ")}`,
+			outcome: fb,
+		});
 		return resolveWithStrategy(ctx, fb);
 	}
 
@@ -215,11 +226,23 @@ async function attemptThreeWayMerge(
 	const prevSyncContent = stateStore ? await stateStore.getContent(path) : undefined;
 	if (!prevSyncContent) {
 		const fb = await resolveFallback();
+		logger?.warn(`${tag}: falling back — no base content in state store`, {
+			path,
+			strategy: tag,
+			reason: stateStore ? "base content not found in store" : "no state store provided",
+			outcome: fb,
+		});
 		return resolveWithStrategy(ctx, fb);
 	}
 
 	if (!isMergeEligible(path, Math.max(local.size, remote.size))) {
 		const fb = await resolveFallback();
+		logger?.warn(`${tag}: falling back — file not eligible for merge`, {
+			path,
+			strategy: tag,
+			reason: `not a mergeable text file (localSize=${local.size}, remoteSize=${remote.size})`,
+			outcome: fb,
+		});
 		return resolveWithStrategy(ctx, fb);
 	}
 
@@ -236,15 +259,36 @@ async function attemptThreeWayMerge(
 	try {
 		mergeResult = threeWayMerge(baseText, localText, remoteText);
 	} catch (mergeErr) {
-		logger?.warn("3-way merge failed, falling back", { path, error: mergeErr instanceof Error ? mergeErr.message : String(mergeErr) });
 		const fb = await resolveFallback();
+		logger?.warn(`${tag}: falling back — merge threw an exception`, {
+			path,
+			strategy: tag,
+			reason: mergeErr instanceof Error ? mergeErr.message : String(mergeErr),
+			outcome: fb,
+		});
 		return resolveWithStrategy(ctx, fb);
 	}
+
+	logger?.debug(`${tag}: merge complete`, {
+		path,
+		success: mergeResult.success,
+		hasConflicts: mergeResult.hasConflicts,
+		baseLines: baseText.split("\n").length,
+		localLines: localText.split("\n").length,
+		remoteLines: remoteText.split("\n").length,
+		mergedLines: mergeResult.content.split("\n").length,
+	});
 
 	// For JSON/Canvas files, validate the merge result
 	const ext = getFileExtension(path);
 	if (ext === ".json" || ext === ".canvas") {
 		if (mergeResult.hasConflicts || !isValidJson(mergeResult.content)) {
+			logger?.warn(`${tag}: falling back — merged ${ext} is invalid`, {
+				path,
+				strategy: tag,
+				reason: mergeResult.hasConflicts ? "merge produced conflict markers" : "merged content is not valid JSON",
+				outcome: "duplicate",
+			});
 			return duplicate(path, localFs, remoteFs, local, remote);
 		}
 	}
@@ -270,6 +314,18 @@ async function attemptThreeWayMerge(
 		action: "merged",
 		hasConflictMarkers: mergeResult.hasConflicts,
 	};
+}
+
+/**
+ * Returns true when two FileEntity objects represent identical content.
+ * Uses `hash` when available; falls back to `backendMeta.contentChecksum`
+ * for backends (e.g. Google Drive) that return `hash: ""` from stat/list.
+ * Returns false when neither side has a usable checksum.
+ */
+function sameContent(a: FileEntity, b: FileEntity): boolean {
+	const hashA = a.hash || (a.backendMeta?.contentChecksum as string | undefined) || "";
+	const hashB = b.hash || (b.backendMeta?.contentChecksum as string | undefined) || "";
+	return hashA !== "" && hashB !== "" && hashA === hashB;
 }
 
 function isValidJson(content: string): boolean {

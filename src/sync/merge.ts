@@ -1,4 +1,4 @@
-import { diffIndices } from "node-diff3";
+import { diffIndices, diff3Merge } from "node-diff3";
 import { getFileExtension } from "../utils/path";
 
 const TEXT_EXTENSIONS = new Set([
@@ -58,7 +58,8 @@ function toHunks(diffs: ReturnType<typeof diffIndices>): DiffHunk[] {
  *
  * Uses independent diffs (diffIndices) from base to each side, then checks for
  * overlapping change ranges — the same principle as git merge. Non-overlapping
- * hunks are applied independently; overlapping hunks produce conflict markers.
+ * hunks are applied independently. Overlapping changes are rendered with
+ * diff3Merge so conflict markers span only the differing lines.
  */
 export function threeWayMerge(
 	base: string,
@@ -84,23 +85,37 @@ export function threeWayMerge(
 	if (localHunks.length === 0) return ok(normRemote, useCRLF);
 	if (remoteHunks.length === 0) return ok(normLocal, useCRLF);
 
-	for (const lh of localHunks) {
-		for (const rh of remoteHunks) {
-			if (rangesOverlap(lh.baseStart, lh.baseLen, rh.baseStart, rh.baseLen)) {
-				if (isSameHunk(lh, rh)) continue;
-				return conflict(localLines, remoteLines, useCRLF);
-			}
+	// Detect whether any local/remote hunks truly overlap.
+	const hasConflict = localHunks.some(lh =>
+		remoteHunks.some(rh =>
+			rangesOverlap(lh.baseStart, lh.baseLen, rh.baseStart, rh.baseLen) && !isSameHunk(lh, rh)
+		)
+	);
+
+	if (!hasConflict) {
+		const allHunks = [...localHunks, ...remoteHunks]
+			.sort((a, b) => b.baseStart - a.baseStart);
+		const result = [...baseLines];
+		for (const h of allHunks) {
+			result.splice(h.baseStart, h.baseLen, ...h.content);
+		}
+		return ok(result.join("\n"), useCRLF);
+	}
+
+	// Overlapping changes — use diff3Merge for minimal per-hunk conflict markers.
+	const regions = diff3Merge(localLines, baseLines, remoteLines);
+	const lines: string[] = [];
+	for (const region of regions) {
+		if (region.ok !== undefined) {
+			lines.push(...region.ok);
+		} else if (region.conflict !== undefined) {
+			lines.push("<<<<<<< LOCAL", ...region.conflict.a, "=======", ...region.conflict.b, ">>>>>>> REMOTE");
 		}
 	}
 
-	const allHunks = [...localHunks, ...remoteHunks]
-		.sort((a, b) => b.baseStart - a.baseStart);
-	const result = [...baseLines];
-	for (const h of allHunks) {
-		result.splice(h.baseStart, h.baseLen, ...h.content);
-	}
-
-	return ok(result.join("\n"), useCRLF);
+	let content = lines.join("\n");
+	if (useCRLF) content = content.replace(/\n/g, "\r\n");
+	return { success: false, content, hasConflicts: true };
 }
 
 function ok(content: string, useCRLF: boolean): MergeResult {
@@ -109,19 +124,4 @@ function ok(content: string, useCRLF: boolean): MergeResult {
 		content: useCRLF ? content.replace(/\n/g, "\r\n") : content,
 		hasConflicts: false,
 	};
-}
-
-function conflict(localLines: string[], remoteLines: string[], useCRLF: boolean): MergeResult {
-	const lines = [
-		"<<<<<<< LOCAL",
-		...localLines,
-		"=======",
-		...remoteLines,
-		">>>>>>> REMOTE",
-	];
-	let content = lines.join("\n");
-	if (useCRLF) {
-		content = content.replace(/\n/g, "\r\n");
-	}
-	return { success: false, content, hasConflicts: true };
 }

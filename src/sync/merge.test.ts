@@ -236,3 +236,43 @@ describe("threeWayMerge", () => {
 		expect(result.content).not.toContain("||||||| BASE");
 	});
 });
+
+describe("threeWayMerge (minimized conflict markers)", () => {
+	it("factors common prefix and suffix outside conflict markers", () => {
+		const base = "header\noriginal\nfooter";
+		const local = "header\nlocal-edit\nfooter";
+		const remote = "header\nremote-edit\nfooter";
+
+		const result = threeWayMerge(base, local, remote);
+
+		expect(result.hasConflicts).toBe(true);
+		expect(result.content).toBe(
+			"header\n<<<<<<< LOCAL\nlocal-edit\n=======\nremote-edit\n>>>>>>> REMOTE\nfooter"
+		);
+	});
+
+	it("produces separate conflict blocks for changes at different sites", () => {
+		const base = "A\nB\nC\nD\nE";
+		const local = "A\nX\nC\nY\nE";
+		const remote = "A\nB2\nC\nD2\nE";
+
+		const result = threeWayMerge(base, local, remote);
+
+		expect(result.hasConflicts).toBe(true);
+		expect(result.content).toBe(
+			"A\n<<<<<<< LOCAL\nX\n=======\nB2\n>>>>>>> REMOTE\nC\n<<<<<<< LOCAL\nY\n=======\nD2\n>>>>>>> REMOTE\nE"
+		);
+	});
+
+	it("preserves CRLF line endings in conflict output", () => {
+		const base = "header\r\noriginal\r\nfooter";
+		const local = "header\r\nlocal-edit\r\nfooter";
+		const remote = "header\r\nremote-edit\r\nfooter";
+
+		const result = threeWayMerge(base, local, remote);
+
+		expect(result.hasConflicts).toBe(true);
+		expect(result.content).toContain("\r\n");
+		expect(result.content).not.toMatch(/(?<!\r)\n/);
+	});
+});
