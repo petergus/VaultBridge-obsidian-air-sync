@@ -58,7 +58,8 @@ function toHunks(diffs: ReturnType<typeof diffIndices>): DiffHunk[] {
  *
  * Uses independent diffs (diffIndices) from base to each side, then checks for
  * overlapping change ranges — the same principle as git merge. Non-overlapping
- * hunks are applied independently; overlapping hunks produce conflict markers.
+ * hunks are applied independently. Overlapping changes are rendered with
+ * diff3Merge so conflict markers span only the differing lines.
  */
 export function threeWayMerge(
 	base: string,
@@ -84,60 +85,7 @@ export function threeWayMerge(
 	if (localHunks.length === 0) return ok(normRemote, useCRLF);
 	if (remoteHunks.length === 0) return ok(normLocal, useCRLF);
 
-	for (const lh of localHunks) {
-		for (const rh of remoteHunks) {
-			if (rangesOverlap(lh.baseStart, lh.baseLen, rh.baseStart, rh.baseLen)) {
-				if (isSameHunk(lh, rh)) continue;
-				return conflict(localLines, remoteLines, useCRLF);
-			}
-		}
-	}
-
-	const allHunks = [...localHunks, ...remoteHunks]
-		.sort((a, b) => b.baseStart - a.baseStart);
-	const result = [...baseLines];
-	for (const h of allHunks) {
-		result.splice(h.baseStart, h.baseLen, ...h.content);
-	}
-
-	return ok(result.join("\n"), useCRLF);
-}
-
-/**
- * Variant of {@link threeWayMerge} that uses `diff3Merge` for conflict
- * rendering so that conflict markers span only the lines that actually differ.
- * Common leading and trailing lines between the two conflicting versions appear
- * outside the markers, matching git's default conflict style.
- *
- * Clean-merge detection still uses `diffIndices` + overlap checking (same as
- * `threeWayMerge`) to avoid the false-conflict edge cases that arise when
- * `diff3Merge` is used alone for non-overlapping nearby changes.
- */
-export function threeWayMergeOptimize(
-	base: string,
-	local: string,
-	remote: string,
-): MergeResult {
-	const useCRLF = local.includes("\r\n") || remote.includes("\r\n");
-	const normBase = base.replace(/\r\n/g, "\n");
-	const normLocal = local.replace(/\r\n/g, "\n");
-	const normRemote = remote.replace(/\r\n/g, "\n");
-
-	if (normBase === normLocal) return ok(normRemote, useCRLF);
-	if (normBase === normRemote) return ok(normLocal, useCRLF);
-	if (normLocal === normRemote) return ok(normLocal, useCRLF);
-
-	const baseLines = normBase.split("\n");
-	const localLines = normLocal.split("\n");
-	const remoteLines = normRemote.split("\n");
-
-	const localHunks = toHunks(diffIndices(baseLines, localLines));
-	const remoteHunks = toHunks(diffIndices(baseLines, remoteLines));
-
-	if (localHunks.length === 0) return ok(normRemote, useCRLF);
-	if (remoteHunks.length === 0) return ok(normLocal, useCRLF);
-
-	// Detect whether any hunks truly overlap (same logic as threeWayMerge).
+	// Detect whether any local/remote hunks truly overlap.
 	let hasConflict = false;
 	for (const lh of localHunks) {
 		for (const rh of remoteHunks) {
@@ -152,7 +100,6 @@ export function threeWayMergeOptimize(
 	}
 
 	if (!hasConflict) {
-		// No real conflict — apply hunks cleanly (same as threeWayMerge).
 		const allHunks = [...localHunks, ...remoteHunks]
 			.sort((a, b) => b.baseStart - a.baseStart);
 		const result = [...baseLines];
@@ -162,7 +109,7 @@ export function threeWayMergeOptimize(
 		return ok(result.join("\n"), useCRLF);
 	}
 
-	// Conflict confirmed — use diff3Merge for minimal per-hunk conflict markers.
+	// Overlapping changes — use diff3Merge for minimal per-hunk conflict markers.
 	const regions = diff3Merge(localLines, baseLines, remoteLines);
 	const lines: string[] = [];
 	for (const region of regions) {
@@ -184,19 +131,4 @@ function ok(content: string, useCRLF: boolean): MergeResult {
 		content: useCRLF ? content.replace(/\n/g, "\r\n") : content,
 		hasConflicts: false,
 	};
-}
-
-function conflict(localLines: string[], remoteLines: string[], useCRLF: boolean): MergeResult {
-	const lines = [
-		"<<<<<<< LOCAL",
-		...localLines,
-		"=======",
-		...remoteLines,
-		">>>>>>> REMOTE",
-	];
-	let content = lines.join("\n");
-	if (useCRLF) {
-		content = content.replace(/\n/g, "\r\n");
-	}
-	return { success: false, content, hasConflicts: true };
 }

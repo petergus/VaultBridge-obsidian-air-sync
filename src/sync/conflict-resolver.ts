@@ -41,8 +41,6 @@ export async function resolveConflict(
 	switch (strategy) {
 		case "auto_merge":
 			return resolveAutoMerge(ctx);
-		case "auto_merge_optimize":
-			return resolveAutoMergeOptimize(ctx);
 		case "duplicate":
 			return resolveWithStrategy(
 				{
@@ -81,30 +79,6 @@ async function resolveAutoMerge(
 	// Try 3-way merge if we have everything needed; newer-wins is the fallback
 	if (local && remote && baseline && stateStore) {
 		return resolveWithStrategy(conflictCtx, "auto_merge", "keep_newer");
-	}
-
-	return resolveWithStrategy(conflictCtx, "keep_newer");
-}
-
-async function resolveAutoMergeOptimize(
-	ctx: ConflictResolverContext,
-): Promise<ConflictResolutionResult> {
-	const { path, localFs, remoteFs, local, remote, baseline, stateStore, logger } = ctx;
-
-	const conflictCtx = {
-		path,
-		localFs,
-		remoteFs,
-		local,
-		remote,
-		prevSync: baseline,
-		stateStore,
-		logger,
-	};
-
-	// Try optimized 3-way merge if we have everything needed; newer-wins is the fallback
-	if (local && remote && baseline && stateStore) {
-		return resolveWithStrategy(conflictCtx, "auto_merge_optimize", "keep_newer");
 	}
 
 	return resolveWithStrategy(conflictCtx, "keep_newer");
