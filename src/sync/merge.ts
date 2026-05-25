@@ -86,18 +86,11 @@ export function threeWayMerge(
 	if (remoteHunks.length === 0) return ok(normLocal, useCRLF);
 
 	// Detect whether any local/remote hunks truly overlap.
-	let hasConflict = false;
-	for (const lh of localHunks) {
-		for (const rh of remoteHunks) {
-			if (rangesOverlap(lh.baseStart, lh.baseLen, rh.baseStart, rh.baseLen)) {
-				if (!isSameHunk(lh, rh)) {
-					hasConflict = true;
-					break;
-				}
-			}
-		}
-		if (hasConflict) break;
-	}
+	const hasConflict = localHunks.some(lh =>
+		remoteHunks.some(rh =>
+			rangesOverlap(lh.baseStart, lh.baseLen, rh.baseStart, rh.baseLen) && !isSameHunk(lh, rh)
+		)
+	);
 
 	if (!hasConflict) {
 		const allHunks = [...localHunks, ...remoteHunks]
