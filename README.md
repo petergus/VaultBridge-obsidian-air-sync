@@ -25,6 +25,8 @@ If the automatic callback fails, try disconnecting and reconnecting from the plu
 
 The first sync after connecting performs a full scan of the Drive folder. This may take some time depending on vault size. Subsequent syncs use incremental change detection and are much faster.
 
+> **Syncing across devices**: The remote folder is matched by your Obsidian vault's name. To sync the same vault on another device, connect it to the same Google account and give the vault the same name — it will then link to the existing remote folder. A vault with a different name creates a separate remote vault that won't sync with the others.
+
 ### Custom OAuth (advanced)
 
 The built-in OAuth uses the `drive.file` scope, which only allows access to files created by the plugin itself. With custom OAuth, you can use your own Google Cloud OAuth client to manage authorization independently.
