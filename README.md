@@ -9,7 +9,7 @@ Works on desktop and mobile, powered by your own Google Drive.
 ## Features
 
 - **Sync that disappears**: Your vault stays in sync on its own — after every edit, when you switch back to Obsidian, and the moment your connection comes back. You never press a button.
-- **Always the latest version**: Open a note and you instantly see the newest version, even if you just changed it on another device.
+- **Always the latest version**: Open a note and it pulls in the newest version if it changed on another device.
 - **Never lose work to a conflict**: Edits made on two devices at once are merged for you. When they truly clash, Air Sync keeps every version safe instead of overwriting — you choose how, and it always errs toward keeping files rather than deleting them.
 - **Set up in a minute**: Connect your Google account once. There's almost nothing to configure.
 - **Control what syncs**: Keep large or private files out of sync with simple patterns (e.g. `*.zip`, `large-assets/**`).
