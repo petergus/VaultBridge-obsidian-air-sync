@@ -6,7 +6,7 @@ Works on desktop and mobile, powered by your own Google Drive.
 
 > **Requires a Google account.**
 
-## Features
+## What you get
 
 - **Sync you never notice**: Your vault stays in sync on its own — after every edit, when you switch back to Obsidian, and the moment your connection comes back. You never press a button.
 - **Always the latest version**: Open a note and it pulls in the newest version if it changed on another device.
@@ -104,7 +104,3 @@ Example:
 ## Disclaimer
 
 This plugin is provided "as is", without warranty of any kind. The authors are not responsible for any loss or corruption of data, or any other damages arising from the use of this plugin. **Use at your own risk.** It is strongly recommended that you back up your vault before using this plugin.
-
-## License
-
-MIT
