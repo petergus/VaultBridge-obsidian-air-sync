@@ -22,7 +22,6 @@ One row per directory; see the layer diagram and per-doc references for module d
 | `fs/` | Backend-agnostic contracts and lifecycle: `IFileSystem`, `IAuthProvider`, `IBackendProvider`, `FileEntity`, the provider registry, `AuthError`, `BackendManager`, and the `ISecretStore`/token-store wrappers over Obsidian SecretStorage. |
 | `fs/local/` | `LocalFs` (Obsidian Vault API wrapper) plus the raw adapter for dot-prefixed paths. |
 | `fs/googledrive/` | The Google Drive backend: `GoogleDriveFs` with metadata cache, the REST v3 `DriveClient`, server + PKCE auth, the path↔ID `DriveMetadataCache`, incremental sync (changes.list), resumable upload, remote-vault resolution, the Drive types, and the built-in / custom OAuth providers. |
-| `fs/mock/` | `InMemoryFs` — an in-memory `IFileSystem` test double. |
 | `ui/` | Settings UI: the main settings tab, the backend-connection section, and Google Drive-specific settings. |
 | `store/` | IndexedDB plumbing: the `IDBHelper` transaction wrapper and the generic `MetadataStore<T>` file-metadata cache. |
 | `logging/` | `Logger` — structured log writer (`.airsync/logs/`). |

@@ -1,14 +1,24 @@
 // Minimal mock of obsidian module for testing
 
-export function debounce<T extends (...args: unknown[]) => unknown>(fn: T, ms: number, resetTimer = true): T & { cancel: () => void } {
+export function debounce<T extends (...args: unknown[]) => unknown>(
+	fn: T,
+	ms: number,
+	resetTimer = true,
+): T & { cancel: () => void } {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	const debounced = (...args: unknown[]) => {
 		if (resetTimer && timer) clearTimeout(timer);
 		if (resetTimer || !timer) {
-			timer = setTimeout(() => { timer = null; fn(...args); }, ms);
+			timer = setTimeout(() => {
+				timer = null;
+				fn(...args);
+			}, ms);
 		}
 	};
-	debounced.cancel = () => { if (timer) clearTimeout(timer); timer = null; };
+	debounced.cancel = () => {
+		if (timer) clearTimeout(timer);
+		timer = null;
+	};
 	return debounced as unknown as T & { cancel: () => void };
 }
 
@@ -20,24 +30,87 @@ export class Notice {
 	constructor(_message: string, _timeout?: number) {}
 }
 
+/**
+ * Test hooks for driving Modal/Setting interactions without a DOM. Populated as
+ * the UI renders; reset these between tests (`__ui.buttons = []; __ui.lastModal = null`).
+ */
+export const __ui: {
+	buttons: { name: string; click: () => void }[];
+	lastModal: { close: () => void } | null;
+} = { buttons: [], lastModal: null };
+
+/** Minimal stand-in for Obsidian's augmented HTMLElement (createEl/empty). */
+class FakeEl {
+	children: FakeEl[] = [];
+	empty(): void {
+		this.children = [];
+	}
+	createEl(_tag: string, _opts?: { text?: string; cls?: string }): FakeEl {
+		const el = new FakeEl();
+		this.children.push(el);
+		return el;
+	}
+}
+
 export class Modal {
 	app: unknown;
-	constructor(app: unknown) { this.app = app; }
-	open() {}
-	close() {}
-	get contentEl(): HTMLElement { return document.createElement("div"); }
+	private _contentEl = new FakeEl();
+	constructor(app: unknown) {
+		this.app = app;
+	}
+	open() {
+		// Each open starts from a clean button list, so __ui.buttons always
+		// reflects only the currently-open modal (no accumulation across opens).
+		__ui.buttons = [];
+		__ui.lastModal = this;
+		(this as unknown as { onOpen?: () => void }).onOpen?.();
+	}
+	close() {
+		(this as unknown as { onClose?: () => void }).onClose?.();
+	}
+	get contentEl(): HTMLElement {
+		return this._contentEl as unknown as HTMLElement;
+	}
 }
 
 export class Setting {
+	private _name = "";
 	constructor(_containerEl: HTMLElement) {}
-	setName(_name: string) { return this; }
-	setDesc(_desc: string) { return this; }
-	setHeading() { return this; }
-	addButton(_cb: (b: unknown) => unknown) { return this; }
-	addText(_cb: (t: unknown) => unknown) { return this; }
-	addDropdown(_cb: (d: unknown) => unknown) { return this; }
-	addToggle(_cb: (t: unknown) => unknown) { return this; }
-	addTextArea(_cb: (t: unknown) => unknown) { return this; }
+	setName(name: string) {
+		this._name = name;
+		return this;
+	}
+	setDesc(_desc: string) {
+		return this;
+	}
+	setHeading() {
+		return this;
+	}
+	addButton(cb: (b: unknown) => unknown) {
+		let handler: () => void = () => {};
+		const btn = {
+			setButtonText: (_t: string) => btn,
+			onClick: (h: () => void) => {
+				handler = h;
+				return btn;
+			},
+		};
+		cb(btn);
+		__ui.buttons.push({ name: this._name, click: () => handler() });
+		return this;
+	}
+	addText(_cb: (t: unknown) => unknown) {
+		return this;
+	}
+	addDropdown(_cb: (d: unknown) => unknown) {
+		return this;
+	}
+	addToggle(_cb: (t: unknown) => unknown) {
+		return this;
+	}
+	addTextArea(_cb: (t: unknown) => unknown) {
+		return this;
+	}
 }
 
 export const Platform = {
@@ -65,12 +138,21 @@ export class TFolder {
 
 /** In-memory Vault mock for unit tests */
 export class Vault {
-	private files = new Map<string, { type: "file" | "folder"; content?: ArrayBuffer; mtime?: number }>();
+	private files = new Map<
+		string,
+		{ type: "file" | "folder"; content?: ArrayBuffer; mtime?: number }
+	>();
 	adapter = {
 		exists: async (path: string): Promise<boolean> => {
 			return this.files.has(path);
 		},
-		stat: async (path: string): Promise<{ type: "file" | "folder"; size: number; mtime: number } | null> => {
+		stat: async (
+			path: string,
+		): Promise<{
+			type: "file" | "folder";
+			size: number;
+			mtime: number;
+		} | null> => {
 			const entry = this.files.get(path);
 			if (!entry) return null;
 			return {
@@ -81,23 +163,37 @@ export class Vault {
 		},
 		readBinary: async (path: string): Promise<ArrayBuffer> => {
 			const entry = this.files.get(path);
-			if (!entry || entry.type !== "file") throw new Error(`File not found: ${path}`);
+			if (!entry || entry.type !== "file")
+				throw new Error(`File not found: ${path}`);
 			return entry.content ?? new ArrayBuffer(0);
 		},
-		list: async (dir: string): Promise<{ files: string[]; folders: string[] }> => {
+		list: async (
+			dir: string,
+		): Promise<{ files: string[]; folders: string[] }> => {
 			const files: string[] = [];
 			const folders: string[] = [];
 			const prefix = dir + "/";
 			for (const [p, entry] of this.files) {
-				if (p.startsWith(prefix) && !p.substring(prefix.length).includes("/")) {
+				if (
+					p.startsWith(prefix) &&
+					!p.substring(prefix.length).includes("/")
+				) {
 					if (entry.type === "folder") folders.push(p);
 					else files.push(p);
 				}
 			}
 			return { files, folders };
 		},
-		writeBinary: async (path: string, data: ArrayBuffer, options?: { mtime?: number }): Promise<void> => {
-			this.files.set(path, { type: "file", content: data, mtime: options?.mtime });
+		writeBinary: async (
+			path: string,
+			data: ArrayBuffer,
+			options?: { mtime?: number },
+		): Promise<void> => {
+			this.files.set(path, {
+				type: "file",
+				content: data,
+				mtime: options?.mtime,
+			});
 		},
 		remove: async (path: string): Promise<void> => {
 			this.files.delete(path);
@@ -126,7 +222,11 @@ export class Vault {
 		const entry = this.files.get(path);
 		if (!entry) return null;
 		if (entry.type === "folder") return new TFolder(path);
-		const f = new TFile(path, entry.content?.byteLength ?? 0, entry.mtime ?? 0);
+		const f = new TFile(
+			path,
+			entry.content?.byteLength ?? 0,
+			entry.mtime ?? 0,
+		);
 		return f;
 	}
 
@@ -140,18 +240,28 @@ export class Vault {
 
 	async readBinary(file: TFile): Promise<ArrayBuffer> {
 		const entry = this.files.get(file.path);
-		if (!entry || entry.type !== "file") throw new Error(`File not found: ${file.path}`);
+		if (!entry || entry.type !== "file")
+			throw new Error(`File not found: ${file.path}`);
 		return entry.content ?? new ArrayBuffer(0);
 	}
 
-	async createBinary(path: string, content: ArrayBuffer, options?: { mtime?: number }): Promise<TFile> {
+	async createBinary(
+		path: string,
+		content: ArrayBuffer,
+		options?: { mtime?: number },
+	): Promise<TFile> {
 		this.files.set(path, { type: "file", content, mtime: options?.mtime });
 		return new TFile(path, content.byteLength, options?.mtime ?? 0);
 	}
 
-	async modifyBinary(file: TFile, content: ArrayBuffer, options?: { mtime?: number }): Promise<void> {
+	async modifyBinary(
+		file: TFile,
+		content: ArrayBuffer,
+		options?: { mtime?: number },
+	): Promise<void> {
 		const entry = this.files.get(file.path);
-		if (!entry || entry.type !== "file") throw new Error(`File not found: ${file.path}`);
+		if (!entry || entry.type !== "file")
+			throw new Error(`File not found: ${file.path}`);
 		entry.content = content;
 		if (options?.mtime !== undefined) entry.mtime = options.mtime;
 	}
@@ -164,7 +274,13 @@ export class Vault {
 			if (entry.type === "folder") {
 				result.push(new TFolder(path));
 			} else {
-				result.push(new TFile(path, entry.content?.byteLength ?? 0, entry.mtime ?? 0));
+				result.push(
+					new TFile(
+						path,
+						entry.content?.byteLength ?? 0,
+						entry.mtime ?? 0,
+					),
+				);
 			}
 		}
 		return result;
@@ -200,7 +316,11 @@ export class App {
 
 export class PluginSettingTab {
 	app: unknown;
-	constructor(app: unknown, _plugin: unknown) { this.app = app; }
+	constructor(app: unknown, _plugin: unknown) {
+		this.app = app;
+	}
 	display() {}
-	get containerEl(): HTMLElement { return document.createElement("div"); }
+	get containerEl(): HTMLElement {
+		return document.createElement("div");
+	}
 }

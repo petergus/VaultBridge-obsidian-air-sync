@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { resolveConflict } from "./conflict-resolver";
 import type { SyncRecord } from "./types";
-import { createMockFs, createMockStateStore, addFile, readText } from "../__mocks__/sync-test-helpers";
+import {
+	createMockFs,
+	createMockStateStore,
+	addFile,
+	readText,
+} from "../__mocks__/sync-test-helpers";
+import { __ui } from "../__mocks__/obsidian";
+import type { App } from "obsidian";
 
 describe("resolveConflict", () => {
 	let localFs: ReturnType<typeof createMockFs>;
@@ -25,7 +32,9 @@ describe("resolveConflict", () => {
 			expect(result.action).toBe("duplicated");
 			expect(result.duplicatePath).toBe("file.conflict.md");
 			expect(readText(remoteFs, "file.md")).toBe("local content");
-			expect(readText(localFs, "file.conflict.md")).toBe("remote content");
+			expect(readText(localFs, "file.conflict.md")).toBe(
+				"remote content",
+			);
 		});
 
 		it("restores remote version locally when local is deleted", async () => {
@@ -63,19 +72,30 @@ describe("resolveConflict", () => {
 			addFile(remoteFs, "file.md", remoteText, 2000);
 
 			const stateStore = createMockStateStore();
-			stateStore.contents.set("file.md", new TextEncoder().encode(base).buffer.slice(0));
+			stateStore.contents.set(
+				"file.md",
+				new TextEncoder().encode(base).buffer.slice(0),
+			);
 
 			const baseline: SyncRecord = {
-				path: "file.md", hash: "", localMtime: 1000, remoteMtime: 1000,
-				localSize: base.length, remoteSize: base.length, syncedAt: 900,
+				path: "file.md",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: base.length,
+				remoteSize: base.length,
+				syncedAt: 900,
 			};
 
 			const result = await resolveConflict(
 				{
-					path: "file.md", localFs, remoteFs,
+					path: "file.md",
+					localFs,
+					remoteFs,
 					local: localFs.files.get("file.md")!.entity,
 					remote: remoteFs.files.get("file.md")!.entity,
-					baseline, stateStore,
+					baseline,
+					stateStore,
 				},
 				"auto_merge",
 			);
@@ -93,19 +113,30 @@ describe("resolveConflict", () => {
 			addFile(remoteFs, "file.md", remoteText, 2000);
 
 			const stateStore = createMockStateStore();
-			stateStore.contents.set("file.md", new TextEncoder().encode(base).buffer.slice(0));
+			stateStore.contents.set(
+				"file.md",
+				new TextEncoder().encode(base).buffer.slice(0),
+			);
 
 			const baseline: SyncRecord = {
-				path: "file.md", hash: "", localMtime: 1000, remoteMtime: 1000,
-				localSize: base.length, remoteSize: base.length, syncedAt: 900,
+				path: "file.md",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: base.length,
+				remoteSize: base.length,
+				syncedAt: 900,
 			};
 
 			const result = await resolveConflict(
 				{
-					path: "file.md", localFs, remoteFs,
+					path: "file.md",
+					localFs,
+					remoteFs,
 					local: localFs.files.get("file.md")!.entity,
 					remote: remoteFs.files.get("file.md")!.entity,
-					baseline, stateStore,
+					baseline,
+					stateStore,
 				},
 				"auto_merge",
 			);
@@ -133,8 +164,13 @@ describe("resolveConflict", () => {
 			const remote = addFile(remoteFs, "file.md", "remote content", 1000);
 
 			const baseline: SyncRecord = {
-				path: "file.md", hash: "", localMtime: 1000, remoteMtime: 1000,
-				localSize: 10, remoteSize: 10, syncedAt: 900,
+				path: "file.md",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 10,
+				remoteSize: 10,
+				syncedAt: 900,
 			};
 
 			const result = await resolveConflict(
@@ -148,18 +184,39 @@ describe("resolveConflict", () => {
 
 		it("falls back to newer-wins for binary files (not merge eligible)", async () => {
 			const local = addFile(localFs, "image.png", "local-binary", 2000);
-			const remote = addFile(remoteFs, "image.png", "remote-binary", 1000);
+			const remote = addFile(
+				remoteFs,
+				"image.png",
+				"remote-binary",
+				1000,
+			);
 
 			const stateStore = createMockStateStore();
-			stateStore.contents.set("image.png", new TextEncoder().encode("base").buffer.slice(0));
+			stateStore.contents.set(
+				"image.png",
+				new TextEncoder().encode("base").buffer.slice(0),
+			);
 
 			const baseline: SyncRecord = {
-				path: "image.png", hash: "", localMtime: 1000, remoteMtime: 1000,
-				localSize: 4, remoteSize: 4, syncedAt: 900,
+				path: "image.png",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 4,
+				remoteSize: 4,
+				syncedAt: 900,
 			};
 
 			const result = await resolveConflict(
-				{ path: "image.png", localFs, remoteFs, local, remote, baseline, stateStore },
+				{
+					path: "image.png",
+					localFs,
+					remoteFs,
+					local,
+					remote,
+					baseline,
+					stateStore,
+				},
 				"auto_merge",
 			);
 
@@ -190,12 +247,25 @@ describe("resolveConflict", () => {
 			// No content stored for this path
 
 			const baseline: SyncRecord = {
-				path: "file.md", hash: "", localMtime: 1000, remoteMtime: 1000,
-				localSize: 10, remoteSize: 10, syncedAt: 900,
+				path: "file.md",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 10,
+				remoteSize: 10,
+				syncedAt: 900,
 			};
 
 			const result = await resolveConflict(
-				{ path: "file.md", localFs, remoteFs, local, remote, baseline, stateStore },
+				{
+					path: "file.md",
+					localFs,
+					remoteFs,
+					local,
+					remote,
+					baseline,
+					stateStore,
+				},
 				"auto_merge",
 			);
 
@@ -213,6 +283,80 @@ describe("resolveConflict", () => {
 				{ path: "file.md", localFs, remoteFs, local, remote },
 				"ask",
 			);
+
+			expect(result.action).toBe("duplicated");
+		});
+	});
+
+	describe("ask strategy — modal choices (with app)", () => {
+		const app = {} as unknown as App;
+
+		beforeEach(() => {
+			__ui.buttons = [];
+			__ui.lastModal = null;
+		});
+
+		function clickChoice(label: string) {
+			const button = __ui.buttons.find((b) => b.name === label);
+			if (!button) throw new Error(`No modal button labelled "${label}"`);
+			button.click();
+		}
+
+		it("routes the 'keep local' choice to keep_local", async () => {
+			const local = addFile(localFs, "file.md", "local content", 2000);
+			const remote = addFile(remoteFs, "file.md", "remote content", 1000);
+
+			const pending = resolveConflict(
+				{ path: "file.md", localFs, remoteFs, local, remote, app },
+				"ask",
+			);
+			clickChoice("Keep local");
+			const result = await pending;
+
+			expect(result.action).toBe("kept_local");
+			expect(readText(remoteFs, "file.md")).toBe("local content");
+		});
+
+		it("routes the 'keep remote' choice to keep_remote", async () => {
+			const local = addFile(localFs, "file.md", "local content", 2000);
+			const remote = addFile(remoteFs, "file.md", "remote content", 1000);
+
+			const pending = resolveConflict(
+				{ path: "file.md", localFs, remoteFs, local, remote, app },
+				"ask",
+			);
+			clickChoice("Keep remote");
+			const result = await pending;
+
+			expect(result.action).toBe("kept_remote");
+			expect(readText(localFs, "file.md")).toBe("remote content");
+		});
+
+		it("routes the 'keep both' choice to duplicate", async () => {
+			const local = addFile(localFs, "file.md", "local content", 2000);
+			const remote = addFile(remoteFs, "file.md", "remote content", 1000);
+
+			const pending = resolveConflict(
+				{ path: "file.md", localFs, remoteFs, local, remote, app },
+				"ask",
+			);
+			clickChoice("Keep both");
+			const result = await pending;
+
+			expect(result.action).toBe("duplicated");
+		});
+
+		it("defaults to duplicate when the modal is dismissed without choosing", async () => {
+			const local = addFile(localFs, "file.md", "local content", 2000);
+			const remote = addFile(remoteFs, "file.md", "remote content", 1000);
+
+			const pending = resolveConflict(
+				{ path: "file.md", localFs, remoteFs, local, remote, app },
+				"ask",
+			);
+			// Dismissing the dialog must never silently pick a side — it keeps both.
+			__ui.lastModal!.close();
+			const result = await pending;
 
 			expect(result.action).toBe("duplicated");
 		});

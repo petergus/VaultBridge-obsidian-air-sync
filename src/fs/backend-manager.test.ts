@@ -5,6 +5,7 @@ import type { AirSyncSettings } from "../settings";
 import type { IFileSystem } from "./interface";
 import type { Logger } from "../logging/logger";
 import { AuthError } from "./errors";
+import { mockSettings } from "../__mocks__/sync-test-helpers";
 
 // Mock the registry to return our fake provider
 vi.mock("./registry", () => ({
@@ -17,23 +18,10 @@ vi.mock("./registry", () => ({
 let fakeProvider: IBackendProvider;
 let fakeFs: IFileSystem;
 
-function mockSettings(overrides: Partial<AirSyncSettings> = {}): AirSyncSettings {
-	return {
-		vaultId: "test-vault",
-		backendType: "test",
-		ignorePatterns: [],
-		syncDotPaths: [],
-		conflictStrategy: "auto_merge",
-		enableThreeWayMerge: false,
-		mobileMaxFileSizeMB: 10,
-		enableLogging: false,
-		logLevel: "info",
-		backendData: {},
-		...overrides,
-	};
-}
-
-function createDeps(settings: AirSyncSettings, overrides: Partial<BackendManagerDeps> = {}): BackendManagerDeps {
+function createDeps(
+	settings: AirSyncSettings,
+	overrides: Partial<BackendManagerDeps> = {},
+): BackendManagerDeps {
 	const noopLogger = {
 		info: vi.fn(),
 		warn: vi.fn(),
@@ -174,7 +162,7 @@ describe("BackendManager — auth error notification on initBackend", () => {
 		await mgr.initBackend();
 
 		expect(deps.notify).toHaveBeenCalledWith(
-			"Authentication expired. Please reconnect in settings."
+			"Authentication expired. Please reconnect in settings.",
 		);
 	});
 
@@ -208,7 +196,7 @@ describe("BackendManager — isConnected false with prior connection", () => {
 		await mgr.initBackend();
 
 		expect(deps.notify).toHaveBeenCalledWith(
-			"Authentication expired. Please reconnect in settings."
+			"Authentication expired. Please reconnect in settings.",
 		);
 		expect(deps.onDisconnected).toHaveBeenCalled();
 	});
@@ -243,7 +231,9 @@ describe("BackendManager — isConnecting flag", () => {
 
 		let connectingDuringInit = false;
 		let resolve!: () => void;
-		const blocker = new Promise<void>((r) => { resolve = r; });
+		const blocker = new Promise<void>((r) => {
+			resolve = r;
+		});
 
 		fakeProvider.resolveRemoteVault = async () => {
 			connectingDuringInit = mgr.isConnecting();
@@ -291,7 +281,9 @@ describe("BackendManager — isConnecting flag", () => {
 		const mgr = new BackendManager(deps);
 
 		let resolve!: () => void;
-		const blocker = new Promise<void>((r) => { resolve = r; });
+		const blocker = new Promise<void>((r) => {
+			resolve = r;
+		});
 
 		fakeProvider.resolveRemoteVault = async () => {
 			await blocker;
@@ -318,7 +310,9 @@ describe("BackendManager — isConnecting flag", () => {
 
 		let connectingDuringComplete = false;
 		let resolve!: () => void;
-		const blocker = new Promise<void>((r) => { resolve = r; });
+		const blocker = new Promise<void>((r) => {
+			resolve = r;
+		});
 
 		fakeProvider.auth.completeAuth = async () => {
 			connectingDuringComplete = mgr.isConnecting();
@@ -356,7 +350,9 @@ describe("BackendManager — isConnecting flag", () => {
 
 		await mgr.initBackend();
 
-		fakeProvider.auth.completeAuth = () => { throw new Error("auth failed"); };
+		fakeProvider.auth.completeAuth = () => {
+			throw new Error("auth failed");
+		};
 
 		await mgr.completeBackendConnect("auth-code");
 
@@ -369,7 +365,9 @@ describe("BackendManager — isConnecting flag", () => {
 		const mgr = new BackendManager(deps);
 
 		let resolve!: () => void;
-		const blocker = new Promise<void>((r) => { resolve = r; });
+		const blocker = new Promise<void>((r) => {
+			resolve = r;
+		});
 
 		fakeProvider.resolveRemoteVault = async () => {
 			await blocker;
@@ -397,7 +395,9 @@ describe("BackendManager — isConnecting flag", () => {
 		(deps.onConnected as ReturnType<typeof vi.fn>).mockClear();
 
 		let resolve!: () => void;
-		const blocker = new Promise<void>((r) => { resolve = r; });
+		const blocker = new Promise<void>((r) => {
+			resolve = r;
+		});
 
 		fakeProvider.auth.completeAuth = async () => {
 			await blocker;

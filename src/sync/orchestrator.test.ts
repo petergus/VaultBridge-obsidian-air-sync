@@ -3,25 +3,35 @@ import "fake-indexeddb/auto";
 import { SyncOrchestrator } from "./orchestrator";
 import type { SyncOrchestratorDeps } from "./orchestrator";
 import { LocalChangeTracker } from "./local-tracker";
-import { createMockFs, addFile } from "../__mocks__/sync-test-helpers";
+import {
+	createMockFs,
+	addFile,
+	mockSettings as baseMockSettings,
+} from "../__mocks__/sync-test-helpers";
+import type { AirSyncSettings } from "../settings";
 import { AuthError } from "../fs/errors";
 
-function mockSettings() {
-	return {
-		vaultId: `test-${Math.random()}`,
+// Make retry backoff instant: the retry tests assert behaviour (retry count,
+// status), not wall-clock timing, and real exponential backoff + jitter added
+// ~4s to the suite. `sleep` is the only export stubbed; error classification
+// (getErrorInfo / isRateLimitError) stays real. Mocking sleep — rather than
+// using fake timers — avoids interfering with fake-indexeddb's async scheduling.
+vi.mock("./error", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./error")>();
+	return { ...actual, sleep: () => Promise.resolve() };
+});
+
+function mockSettings(): AirSyncSettings {
+	// Unique vaultId per call keeps each orchestrator's fake-indexeddb store isolated.
+	return baseMockSettings({
 		backendType: "none",
-		ignorePatterns: [] as string[],
-		syncDotPaths: [] as string[],
-		conflictStrategy: "auto_merge" as const,
-		enableThreeWayMerge: false,
-		mobileMaxFileSizeMB: 10,
-		enableLogging: false,
-		logLevel: "info" as const,
-		backendData: {} as Record<string, Record<string, unknown>>,
-	};
+		vaultId: `test-${Math.random()}`,
+	});
 }
 
-function createDeps(overrides: Partial<SyncOrchestratorDeps> = {}): SyncOrchestratorDeps {
+function createDeps(
+	overrides: Partial<SyncOrchestratorDeps> = {},
+): SyncOrchestratorDeps {
 	const localFs = createMockFs("local");
 	const remoteFs = createMockFs("remote");
 	return {
@@ -53,7 +63,9 @@ describe("SyncOrchestrator", () => {
 			const localFs = createMockFs("local");
 			const remoteFs = createMockFs("remote");
 			let resolveSync!: () => void;
-			const syncStarted = new Promise<void>((res) => { resolveSync = res; });
+			const syncStarted = new Promise<void>((res) => {
+				resolveSync = res;
+			});
 
 			deps.localFs = () => localFs;
 			deps.remoteFs = () => remoteFs;
@@ -80,13 +92,20 @@ describe("SyncOrchestrator", () => {
 			const debugFn = vi.fn();
 			const deps = createDeps({
 				remoteFs: () => null,
-				logger: { debug: debugFn, info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as import("../logging/logger").Logger,
+				logger: {
+					debug: debugFn,
+					info: vi.fn(),
+					warn: vi.fn(),
+					error: vi.fn(),
+				} as unknown as import("../logging/logger").Logger,
 			});
 			const orchestrator = new SyncOrchestrator(deps);
 			await orchestrator.runSync();
 			expect(deps.notify).not.toHaveBeenCalled();
 			expect(deps.onStatusChange).toHaveBeenCalledWith("not_connected");
-			expect(debugFn).toHaveBeenCalledWith("runSync: skipped — no remote backend");
+			expect(debugFn).toHaveBeenCalledWith(
+				"runSync: skipped — no remote backend",
+			);
 			await orchestrator.close();
 		});
 
@@ -118,7 +137,9 @@ describe("SyncOrchestrator", () => {
 
 			let callCount = 0;
 			let unblockFirst!: () => void;
-			const blocker = new Promise<void>((res) => { unblockFirst = res; });
+			const blocker = new Promise<void>((res) => {
+				unblockFirst = res;
+			});
 
 			vi.spyOn(localFs, "list").mockImplementation(async () => {
 				callCount++;
@@ -153,7 +174,7 @@ describe("SyncOrchestrator", () => {
 
 			expect(deps.onStatusChange).toHaveBeenCalledWith("error");
 			expect(deps.notify).toHaveBeenCalledWith(
-				"Authentication error. Please reconnect in settings."
+				"Authentication error. Please reconnect in settings.",
 			);
 			await orchestrator.close();
 		});
@@ -187,13 +208,17 @@ describe("SyncOrchestrator", () => {
 			deps.localFs = () => localFs;
 			deps.remoteFs = () => remoteFs;
 
-			vi.spyOn(localFs, "list").mockRejectedValue(new Error("network down"));
+			vi.spyOn(localFs, "list").mockRejectedValue(
+				new Error("network down"),
+			);
 
 			const orchestrator = new SyncOrchestrator(deps);
 			await orchestrator.runSync();
 
 			expect(deps.onStatusChange).toHaveBeenCalledWith("error");
-			expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("Sync error:"));
+			expect(deps.notify).toHaveBeenCalledWith(
+				expect.stringContaining("Sync error:"),
+			);
 			await orchestrator.close();
 		});
 
@@ -268,15 +293,22 @@ describe("SyncOrchestrator", () => {
 			const orchestrator = new SyncOrchestrator(deps);
 			// Seed baseline for old.md so change detector sees it as previously synced
 			await orchestrator.state.put({
-				path: "old.md", hash: "h1", localMtime: 1000, remoteMtime: 1000,
-				localSize: 7, remoteSize: 7, syncedAt: 900,
+				path: "old.md",
+				hash: "h1",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 7,
+				remoteSize: 7,
+				syncedAt: 900,
 			});
 
 			const renameSpy = vi.spyOn(remoteFs, "rename");
 			await orchestrator.runSync();
 
 			expect(renameSpy).toHaveBeenCalledWith("old.md", "new.md");
-			expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("renamed"));
+			expect(deps.notify).toHaveBeenCalledWith(
+				expect.stringContaining("renamed"),
+			);
 			await orchestrator.close();
 		});
 
@@ -329,7 +361,9 @@ describe("SyncOrchestrator", () => {
 			const orchestrator = new SyncOrchestrator(deps);
 			await orchestrator.pullSingle("note.md");
 
-			expect(deps.localTracker.getDirtyPaths().has("note.md")).toBe(false);
+			expect(deps.localTracker.getDirtyPaths().has("note.md")).toBe(
+				false,
+			);
 			await orchestrator.close();
 		});
 
@@ -349,16 +383,24 @@ describe("SyncOrchestrator", () => {
 			deps.localFs = () => localFs;
 			deps.remoteFs = () => remoteFs;
 
-			vi.spyOn(remoteFs, "stat").mockResolvedValue(
-				{ path: "note.md", isDirectory: false, size: 10, mtime: 1000, hash: "" }
+			vi.spyOn(remoteFs, "stat").mockResolvedValue({
+				path: "note.md",
+				isDirectory: false,
+				size: 10,
+				mtime: 1000,
+				hash: "",
+			});
+			vi.spyOn(remoteFs, "read").mockRejectedValue(
+				new Error("network error"),
 			);
-			vi.spyOn(remoteFs, "read").mockRejectedValue(new Error("network error"));
 
 			const orchestrator = new SyncOrchestrator(deps);
-			await expect(orchestrator.pullSingle("note.md")).resolves.toBeUndefined();
+			await expect(
+				orchestrator.pullSingle("note.md"),
+			).resolves.toBeUndefined();
 			expect(errorSpy).toHaveBeenCalledWith(
 				"pullSingle: failed",
-				expect.objectContaining({ path: "note.md" })
+				expect.objectContaining({ path: "note.md" }),
 			);
 			await orchestrator.close();
 		});
@@ -537,15 +579,23 @@ describe("SyncOrchestrator", () => {
 		it("does not delete a file missing from the listing but present on disk", async () => {
 			const localFs = createMockFs("local");
 			const remoteFs = createMockFs("remote");
-			const deps = createDeps({ localFs: () => localFs, remoteFs: () => remoteFs });
+			const deps = createDeps({
+				localFs: () => localFs,
+				remoteFs: () => remoteFs,
+			});
 			const orchestrator = new SyncOrchestrator(deps);
 
 			// Steady state: a.md synced on both sides with a matching baseline.
 			addFile(remoteFs, "a.md", "hello", 1000);
 			addFile(localFs, "a.md", "hello", 1000); // present on disk (stat finds it)
 			await orchestrator.state.put({
-				path: "a.md", hash: "", localMtime: 1000, remoteMtime: 1000,
-				localSize: 5, remoteSize: 5, syncedAt: 900,
+				path: "a.md",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 5,
+				remoteSize: 5,
+				syncedAt: 900,
 			});
 
 			// Incomplete listing (index not fully loaded) — but stat() still finds

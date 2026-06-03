@@ -11,6 +11,7 @@ import {
 import type { SyncStateStore } from "./state";
 import type { MixedEntity, SyncRecord } from "./types";
 import type { FileEntity } from "../fs/types";
+import { sha256 } from "../utils/hash";
 
 /**
  * Delete-safety contracts.
@@ -30,16 +31,21 @@ import type { FileEntity } from "../fs/types";
 
 const CONTENT = "content"; // 7 bytes
 
-function baselineRecord(path: string): SyncRecord {
+function baselineRecord(path: string, hash = "h"): SyncRecord {
 	return {
 		path,
-		hash: "h",
+		hash,
 		localMtime: 1000,
 		remoteMtime: 1000,
 		localSize: CONTENT.length,
 		remoteSize: CONTENT.length,
 		syncedAt: 900,
 	};
+}
+
+/** SHA-256 of CONTENT — a baseline reflects the hash of the content it was synced from. */
+function contentHash(): Promise<string> {
+	return sha256(new TextEncoder().encode(CONTENT).buffer as ArrayBuffer);
 }
 
 describe("§2-1 (fixed): a lone deletion is no longer silently aborted", () => {
@@ -72,7 +78,9 @@ describe("§2-1 (fixed): a lone deletion is no longer silently aborted", () => {
 			{
 				localFs,
 				remoteFs,
-				committer: { stateStore: stateStore as unknown as SyncStateStore },
+				committer: {
+					stateStore: stateStore as unknown as SyncStateStore,
+				},
 				conflictStrategy: "auto_merge",
 			},
 		);
@@ -96,11 +104,12 @@ describe("phantom warm deletion: an incomplete listing does not mass-delete", ()
 		// 20 files exist on both sides with baselines, but the local listing comes
 		// back empty (an incomplete getAllLoadedFiles before the index settles).
 		// The files are still present on disk, so stat() finds every one.
+		const hash = await contentHash();
 		for (let i = 0; i < 20; i++) {
 			const p = `note-${i}.md`;
 			addFile(remoteFs, p, CONTENT, 1000);
 			addFile(localFs, p, CONTENT, 1000);
-			await stateStore.put(baselineRecord(p));
+			await stateStore.put(baselineRecord(p, hash));
 		}
 		vi.spyOn(localFs, "list").mockResolvedValueOnce([]);
 
@@ -110,11 +119,15 @@ describe("phantom warm deletion: an incomplete listing does not mass-delete", ()
 			stateStore,
 			localTracker,
 		});
-		const deletes = planSync(changeSet.entries).actions.filter(
+		const actions = planSync(changeSet.entries).actions;
+		const deletes = actions.filter(
 			(a) => a.action === "delete_remote",
 		).length;
 
 		expect(deletes).toBe(0);
+		// The files are unchanged vs baseline, so the incomplete listing must
+		// produce NO spurious actions at all — not deletions, not conflicts.
+		expect(actions).toHaveLength(0);
 	});
 
 	it("a genuinely deleted file (absent on disk too) is still planned as delete_remote", async () => {
@@ -124,7 +137,7 @@ describe("phantom warm deletion: an incomplete listing does not mass-delete", ()
 		const localTracker = new LocalChangeTracker();
 
 		addFile(remoteFs, "gone.md", CONTENT, 1000);
-		await stateStore.put(baselineRecord("gone.md"));
+		await stateStore.put(baselineRecord("gone.md", await contentHash()));
 		// gone.md is in neither the listing nor on disk → a real deletion.
 
 		const changeSet = await collectChanges({

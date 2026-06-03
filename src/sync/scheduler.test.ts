@@ -5,21 +5,33 @@ const windowListeners = new Map<string, EventListener>();
 const documentListeners = new Map<string, EventListener>();
 
 vi.stubGlobal("window", {
-	addEventListener: (event: string, handler: EventListener) => { windowListeners.set(event, handler); },
-	removeEventListener: (event: string, _handler: EventListener) => { windowListeners.delete(event); },
+	addEventListener: (event: string, handler: EventListener) => {
+		windowListeners.set(event, handler);
+	},
+	removeEventListener: (event: string, _handler: EventListener) => {
+		windowListeners.delete(event);
+	},
 });
 
 vi.stubGlobal("document", {
 	visibilityState: "visible" as string,
-	addEventListener: (event: string, handler: EventListener) => { documentListeners.set(event, handler); },
-	removeEventListener: (event: string, _handler: EventListener) => { documentListeners.delete(event); },
+	addEventListener: (event: string, handler: EventListener) => {
+		documentListeners.set(event, handler);
+	},
+	removeEventListener: (event: string, _handler: EventListener) => {
+		documentListeners.delete(event);
+	},
 });
 
 import { SyncScheduler } from "./scheduler";
 import type { SyncSchedulerDeps } from "./scheduler";
 import type { EventRef, TAbstractFile } from "obsidian";
 import { LocalChangeTracker } from "./local-tracker";
-import { createMockFs, createMockStateStore } from "../__mocks__/sync-test-helpers";
+import {
+	createMockFs,
+	createMockStateStore,
+} from "../__mocks__/sync-test-helpers";
+import { sha256 } from "../utils/hash";
 import type { SyncRecord } from "./types";
 
 type VaultHandler = (file: TAbstractFile) => void;
@@ -42,7 +54,9 @@ function createDeps(
 	};
 
 	const runSync = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-	const pullSingle = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
+	const pullSingle = vi
+		.fn<(path: string) => Promise<void>>()
+		.mockResolvedValue(undefined);
 
 	const deps: SyncSchedulerDeps & {
 		vaultHandlers: Map<string, WorkspaceHandler>;
@@ -78,7 +92,9 @@ function createDeps(
 		orchestrator: { runSync, pullSingle, isSyncing: () => false },
 		isExcluded: () => false,
 		registerEvent: vi.fn(),
-		register: vi.fn((cb: () => void) => { cleanups.push(cb); }),
+		register: vi.fn((cb: () => void) => {
+			cleanups.push(cb);
+		}),
 		vaultHandlers,
 		workspaceHandlers,
 		cleanups,
@@ -148,7 +164,9 @@ describe("SyncScheduler", () => {
 			handler(makeFile("new.md"), "old.md");
 			expect(deps.localTracker.getDirtyPaths().has("new.md")).toBe(true);
 			expect(deps.localTracker.getDirtyPaths().has("old.md")).toBe(true);
-			expect(deps.localTracker.getRenamePairs().get("new.md")).toBe("old.md");
+			expect(deps.localTracker.getRenamePairs().get("new.md")).toBe(
+				"old.md",
+			);
 		});
 
 		it("falls back to markDirty when one side of rename is excluded", () => {
@@ -166,13 +184,17 @@ describe("SyncScheduler", () => {
 
 		it("skips excluded paths", () => {
 			scheduler.destroy();
-			deps = createDeps({ isExcluded: (p: string) => p.startsWith("excluded/") });
+			deps = createDeps({
+				isExcluded: (p: string) => p.startsWith("excluded/"),
+			});
 			scheduler = new SyncScheduler(deps);
 			scheduler.start();
 
 			const handler = deps.vaultHandlers.get("create") as VaultHandler;
 			handler(makeFile("excluded/note.md"));
-			expect(deps.localTracker.getDirtyPaths().has("excluded/note.md")).toBe(false);
+			expect(
+				deps.localTracker.getDirtyPaths().has("excluded/note.md"),
+			).toBe(false);
 		});
 
 		it("triggers debounced sync on vault change", () => {
@@ -220,21 +242,41 @@ describe("SyncScheduler", () => {
 
 	describe("file-open priority sync", () => {
 		it("pulls when remote changed but local unchanged", async () => {
+			// Baseline hash reflects the local content, so stat()'s SHA-256 matches it
+			// and the local side is correctly seen as unchanged (only remote differs).
+			const localContent = new ArrayBuffer(10);
 			const record: SyncRecord = {
-				path: "note.md", hash: "abc", localMtime: 1000,
-				remoteMtime: 1000, localSize: 10, remoteSize: 10, syncedAt: 900,
+				path: "note.md",
+				hash: await sha256(localContent),
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 10,
+				remoteSize: 10,
+				syncedAt: 900,
 			};
 			await deps.stateStore.put(record);
 
 			const localFs = createMockFs("local");
 			const remoteFs = createMockFs("remote");
 			localFs.files.set("note.md", {
-				content: new ArrayBuffer(10),
-				entity: { path: "note.md", isDirectory: false, size: 10, mtime: 1000, hash: "" },
+				content: localContent,
+				entity: {
+					path: "note.md",
+					isDirectory: false,
+					size: 10,
+					mtime: 1000,
+					hash: "",
+				},
 			});
 			remoteFs.files.set("note.md", {
 				content: new ArrayBuffer(15),
-				entity: { path: "note.md", isDirectory: false, size: 15, mtime: 2000, hash: "" },
+				entity: {
+					path: "note.md",
+					isDirectory: false,
+					size: 15,
+					mtime: 2000,
+					hash: "",
+				},
 			});
 
 			scheduler.destroy();
