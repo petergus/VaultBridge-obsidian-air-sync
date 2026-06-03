@@ -20,6 +20,10 @@ jobs:
               with:
                   node-version: 20
 
+            # package-lock.json is generated with npm 11; pin CI to the same major
+            # so optional peer deps (e.g. esbuild via vite 8) resolve identically.
+            - run: npm install -g npm@11
+
             - run: npm ci
 
             - run: npm run build
