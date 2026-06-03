@@ -1,9 +1,5 @@
 # Air Sync -- Architecture
 
-## Vision
-
-Sync should be invisible -- like air. When the user opens Obsidian, changes since the last session are reflected within hundreds of milliseconds. After editing, background sync runs on a 5-second batch interval. Opening a note always shows the latest version. If the network drops or the app crashes, the worst case is a duplicate file; user data is never lost. Conflicts are resolved transparently via auto-merge, and the user is only prompted when edits truly contradict each other.
-
 ## Design principles
 
 1. **3-state sync** -- Compare local, remote, and last-sync-record to detect changes. Text conflicts use 3-way merge.
@@ -14,83 +10,24 @@ Sync should be invisible -- like air. When the user opens Obsidian, changes sinc
 6. **Duplicate over delete** -- When in doubt, keep the file. Deleting an unwanted copy is easy; recovering a lost file is impossible.
 7. **Single responsibility per module** -- Each file owns one concept. Target 200-300 lines; split when exceeded.
 
-## File structure
+## Module map
 
-```
-src/
-├── main.ts                          # Plugin entry point (lifecycle only)
-├── settings.ts                      # AirSyncSettings type & defaults
-├── sync/
-│   ├── types.ts                     # SyncRecord, MixedEntity, SyncAction, SyncPlan
-│   ├── local-tracker.ts             # LocalChangeTracker — in-memory dirty path set
-│   ├── change-compare.ts            # hasChanged(), hasRemoteChanged() — diff against baseline
-│   ├── change-detector.ts           # collectChanges() — hot/warm/cold temperature modes
-│   ├── decision-engine.ts           # planSync() — builds SyncPlan from MixedEntity[]
-│   ├── plan-executor.ts             # executePlan() — grouped execution (A/B/C/D)
-│   ├── state-committer.ts           # commitAction() — per-action SyncRecord upsert/delete
-│   ├── conflict-resolver.ts         # resolveConflict() — 3-strategy conflict resolver
-│   ├── rename-optimizer.ts           # refinePlan() — rename optimization orchestrator
-│   ├── rename-optimizer-types.ts    # RenameOptResult, SkippedRename — optimization result types
-│   ├── optimize-local-renames.ts    # Local rename optimization (hash-verified)
-│   ├── optimize-remote-renames.ts   # Remote rename optimization (trusted)
-│   ├── conflict.ts                  # resolveWithStrategy() — low-level strategy implementations
-│   ├── merge.ts                     # threeWayMerge() — git-style merge via diffIndices
-│   ├── orchestrator.ts              # SyncOrchestrator — retry loop, mutex, status transitions
-│   ├── scheduler.ts                 # SyncScheduler — vault events, timers, file-open sync, layout-ready gate
-│   ├── state.ts                     # SyncStateStore — IndexedDB persistence for SyncRecords
-│   ├── error.ts                     # getErrorInfo(), isRateLimitError(), sleep()
-│   ├── conflict-history.ts          # ConflictHistory — JSON audit log per device
-│   └── remote-vault.ts              # RemoteVaultResolution type, REMOTE_VAULT_ROOT constant
-│
-├── fs/
-│   ├── types.ts                     # FileEntity
-│   ├── interface.ts                 # IFileSystem — abstract filesystem contract
-│   ├── auth.ts                      # IAuthProvider — OAuth/credential lifecycle
-│   ├── backend.ts                   # IBackendProvider — backend provider abstraction
-│   ├── registry.ts                  # Backend registry (initRegistry, getBackendProvider)
-│   ├── errors.ts                    # AuthError
-│   ├── backend-manager.ts           # BackendManager — init, connect, disconnect lifecycle
-│   ├── secret-store.ts              # ISecretStore — Obsidian SecretStorage wrapper
-│   ├── token-store.ts               # Token read/write/clear helpers for SecretStorage
-│   ├── local/
-│   │   ├── index.ts                 # LocalFs — Obsidian Vault API wrapper
-│   │   └── dot-path-adapter.ts      # DotPathAdapter — raw adapter for dot-prefixed paths
-│   ├── googledrive/
-│   │   ├── index.ts                 # GoogleDriveFs — IFileSystem with metadata cache
-│   │   ├── client.ts                # DriveClient — Drive REST API v3 client
-│   │   ├── auth.ts                  # GoogleAuth (server), GoogleAuthDirect (PKCE)
-│   │   ├── metadata-cache.ts        # DriveMetadataCache — path<->ID mapping
-│   │   ├── incremental-sync.ts      # applyIncrementalChanges() — changes.list integration
-│   │   ├── resumable-upload.ts      # ResumableUploader — large file upload (>5 MB)
-│   │   ├── remote-vault.ts          # resolveGDriveRemoteVault() — vault folder resolution
-│   │   ├── provider-base.ts         # GoogleDriveProviderBase, GoogleDriveAuthProviderBase
-│   │   ├── provider.ts              # GoogleDriveProvider (built-in OAuth)
-│   │   ├── provider-custom.ts       # GoogleDriveCustomProvider (user-provided credentials)
-│   │   └── types.ts                 # DriveFile, DriveFileList, DriveChangeList, assertions
-│   └── mock/
-│       └── index.ts                 # InMemoryFs — test double
-│
-├── ui/
-│   ├── settings.ts                  # AirSyncSettingTab — main settings UI
-│   ├── backend-settings.ts          # Backend connection settings section
-│   └── googledrive-settings.ts      # Google Drive specific settings
-│
-├── store/
-│   ├── idb-helper.ts                # IDBHelper — IndexedDB transaction wrapper
-│   └── metadata-store.ts            # MetadataStore<T> — generic IDB-backed file metadata cache
-│
-├── logging/
-│   └── logger.ts                    # Logger — structured log writer (.airsync/logs/)
-│
-├── queue/
-│   └── async-queue.ts               # AsyncPool (bounded concurrency), AsyncMutex
-│
-└── utils/
-    ├── hash.ts                      # sha256() — Web Crypto wrapper
-    ├── md5.ts                       # md5() — js-md5 wrapper for cold start hash matching
-    ├── path.ts                      # Path utilities (getFileExtension, etc.)
-    └── ignore.ts                    # isIgnored() — gitignore-style pattern matching
-```
+One row per directory; see the layer diagram and per-doc references for module detail.
+
+| Path | Responsibility |
+|------|----------------|
+| `main.ts` | Plugin entry point — lifecycle only: load settings, register commands, wire components, handle the OAuth protocol callback. |
+| `settings.ts` | `AirSyncSettings` type and `DEFAULT_SETTINGS`. |
+| `sync/` | The sync pipeline and its orchestration: change tracking and detection (hot/warm/cold), the decision engine, rename optimization, plan execution (groups A–D), per-action state commit, conflict resolution and 3-way merge, the orchestrator (mutex/retry/status), the scheduler (vault events + triggers), the IndexedDB `SyncStateStore`, error classification, and the conflict-history audit writer. |
+| `fs/` | Backend-agnostic contracts and lifecycle: `IFileSystem`, `IAuthProvider`, `IBackendProvider`, `FileEntity`, the provider registry, `AuthError`, `BackendManager`, and the `ISecretStore`/token-store wrappers over Obsidian SecretStorage. |
+| `fs/local/` | `LocalFs` (Obsidian Vault API wrapper) plus the raw adapter for dot-prefixed paths. |
+| `fs/googledrive/` | The Google Drive backend: `GoogleDriveFs` with metadata cache, the REST v3 `DriveClient`, server + PKCE auth, the path↔ID `DriveMetadataCache`, incremental sync (changes.list), resumable upload, remote-vault resolution, the Drive types, and the built-in / custom OAuth providers. |
+| `fs/mock/` | `InMemoryFs` — an in-memory `IFileSystem` test double. |
+| `ui/` | Settings UI: the main settings tab, the backend-connection section, and Google Drive-specific settings. |
+| `store/` | IndexedDB plumbing: the `IDBHelper` transaction wrapper and the generic `MetadataStore<T>` file-metadata cache. |
+| `logging/` | `Logger` — structured log writer (`.airsync/logs/`). |
+| `queue/` | Concurrency primitives: `AsyncPool` (bounded concurrency) and `AsyncMutex`. |
+| `utils/` | Helpers: `sha256()` / `md5()` hashing, path utilities (`getFileExtension`, etc.), and gitignore-style `isIgnored()` pattern matching. |
 
 ## Layer architecture
 
@@ -147,6 +84,8 @@ src/
          └───────────────────────┘
 ```
 
+`runSync` early-returns when no remote backend is present, the backend is connecting, or layout is not ready; it serializes via an `AsyncMutex`. A sync arriving while one runs sets a `syncPending` flag and the running cycle re-runs via a `do/while` loop (coalescing). Each cycle retries up to `MAX_RETRIES = 3`: `AuthError` (status 401) and a non-rate-limit HTTP 403 abort the whole sync immediately; HTTP 404 breaks the retry loop without special handling. For 429 or a rate-limit 403 carrying a `Retry-After` header, delay = `retryAfter * 1000` ms; otherwise exponential backoff with jitter = `2^(attempt-1) * 1000 * (0.5 + Math.random())` ms. See [docs/error-handling.md](docs/error-handling.md) for the full classification/recovery table.
+
 ## Core data models
 
 ### FileEntity (fs/types.ts)
@@ -161,6 +100,8 @@ interface FileEntity {
   backendMeta?: Record<string, unknown>;  // e.g. { driveId, contentChecksum }
 }
 ```
+
+Invariant: mtime/hash comparisons must treat sentinels as "no data" — mtime 0 is not the epoch, and hash is always `""` for directories. `hasChanged`/`hasRemoteChanged` only use mtime when both values are > 0.
 
 ### SyncRecord (sync/types.ts)
 
@@ -215,6 +156,8 @@ interface RenameAction {
   path: string;
   action: "rename_remote" | "rename_local";
   oldPath: string;
+  isFolder?: boolean;          // when true, oldPath/path are folder paths and descendants lists affected children
+  descendants?: RenamePair[];  // descendant path mappings consumed by this folder rename
   local?: FileEntity;
   remote?: FileEntity;
   baseline?: SyncRecord;
@@ -222,6 +165,34 @@ interface RenameAction {
 
 interface SyncPlan {
   actions: SyncAction[];
+}
+```
+
+`match` is emitted only when local and remote have equal non-empty hashes and equal sizes with no baseline (identical files first seen together); otherwise `conflict`. `cleanup` is emitted when a baseline exists but neither side does (both deleted). Both are state-only and perform no file I/O: `match` upserts a SyncRecord (the files are now in sync), while `cleanup` DELETES the baseline SyncRecord (the path is gone on both sides).
+
+### Supporting types (sync/types.ts)
+
+```typescript
+// Orchestrator / status-bar state machine
+type SyncStatus = "idle" | "syncing" | "error" | "partial_error" | "not_connected";
+
+// User-facing conflict resolution strategy (settings.conflictStrategy)
+type ConflictStrategy = "auto_merge" | "duplicate" | "ask";
+
+// Source/destination path pair for rename detection (also used by IFileSystem.getChangedPaths)
+interface RenamePair {
+  oldPath: string;
+  newPath: string;
+  isFolder?: boolean;  // true = folder rename
+}
+
+// Audit record of a resolved conflict (see docs/conflict-resolution.md)
+interface ConflictRecord {
+  path: string;
+  actionType: SyncActionType;
+  strategy: ConflictStrategy;
+  action: "kept_local" | "kept_remote" | "duplicated" | "merged";
+  // ... local?, remote?, duplicatePath?, hasConflictMarkers?, resolvedAt, sessionId
 }
 ```
 
@@ -244,7 +215,7 @@ interface IFileSystem {
   getChangedPaths?(): Promise<{
     modified: string[];
     deleted: string[];
-    renamed?: { oldPath: string; newPath: string }[];
+    renamed?: RenamePair[];  // RenamePair = { oldPath, newPath, isFolder? }
   } | null>;
   close?(): Promise<void>;
 }
@@ -253,9 +224,10 @@ interface IFileSystem {
 Key design points:
 
 - `list()` may return `hash: ""` for performance; use `stat()` when an accurate hash is needed. `LocalFs.stat()` is authoritative: on a vault-index miss it falls back to the filesystem adapter, so a not-yet-indexed file on disk is never reported absent (absence drives deletions).
-- `getChangedPaths()` is optional. When implemented (e.g. Google Drive changes.list), it enables the hot change-detection path. The `renamed` field allows backends to report file moves for native rename optimization.
-- `delete()` is idempotent. Backends may use soft deletion (trash).
+- `getChangedPaths()` is optional and should be called before `list()`. When implemented (e.g. Google Drive changes.list) it supplies the remote-side changed/deleted/renamed paths consumed by both hot and warm change detection (the hot path is triggered by the local change tracker's dirty paths, not by this method). The `renamed` field lets backends report file moves for native rename optimization.
+- `delete()` is idempotent (deleting a non-existent path is a no-op) and backends may use soft deletion (trash). Deleting a directory removes its children recursively; the caller must separately clean up the SyncRecord for each removed child path (`delete()` does not touch sync state).
 - `write()` auto-creates parent directories.
+- `rename(oldPath, newPath)` throws if `oldPath` does not exist or if `newPath` already exists (the rename optimizer relies on the latter to skip occupied destinations); it auto-creates parent directories. `mkdir()` is idempotent and throws if an intermediate component is an existing file.
 
 ## IBackendProvider / IAuthProvider
 
@@ -265,7 +237,8 @@ Abstraction for a remote storage backend. main.ts and sync/ never import backend
 
 ```typescript
 interface IBackendProvider {
-  readonly type: string;             // "googledrive", "googledrive-custom"
+  readonly type: string;             // "googledrive", "googledrive-custom". Stable, unique registry key;
+                                     // also indexes settings.backendData and per-backend secrets. Immutable once published.
   readonly displayName: string;
   readonly auth: IAuthProvider;
   createFs(app, settings, logger?): IFileSystem | null;
@@ -288,11 +261,11 @@ interface IAuthProvider {
 }
 ```
 
-The provider registry (`fs/registry.ts`) maps backend types to provider instances. New backends register here; no changes needed elsewhere.
+The provider registry (`fs/registry.ts`) maps backend types to provider instances. New backends register here; no changes needed elsewhere. `initRegistry(secretStore)` must be called once during plugin load (`main.ts` onload) before any `getBackendProvider` call; it injects `ISecretStore` into the provider constructors. Until then the registry is empty and `getBackendProvider` returns undefined. Built-in providers: `GoogleDriveProvider` (type `googledrive`) and `GoogleDriveCustomProvider` (type `googledrive-custom`). On a duplicate `type`, the first registration wins (later ones are skipped in the type lookup).
 
 ## Detailed documentation
 
-- [Sync pipeline](docs/sync-pipeline.md) -- temperature modes, decision table, execution groups
+- [Sync pipeline](docs/sync-pipeline.md) -- temperature modes, decision table, execution groups, deletion safety
 - [Conflict resolution](docs/conflict-resolution.md) -- strategies, 3-way merge, conflict history
-- [Google Drive backend](docs/google-drive-backend.md) -- metadata cache, incremental sync, authentication
-- [Error handling](docs/error-handling.md) -- classification, retry, recovery scenarios
+- [Google Drive backend](docs/google-drive-backend.md) -- metadata cache, authentication, and the sole owner of incremental sync / cache invalidation
+- [Error handling](docs/error-handling.md) -- resilience: error classification, retry, rate limiting (recovery scenarios cross-reference the sync pipeline)

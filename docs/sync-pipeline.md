@@ -11,6 +11,8 @@ Each sync cycle runs a 4-phase pipeline:
 
 The orchestrator (`SyncOrchestrator.executeSyncOnce()`) drives this pipeline, applying ignore-pattern filtering and mobile size limits between Collect and Decide.
 
+`runSync()` is gated on a connected remote (`remoteFs` present), layout-ready, and not-connecting; it serializes via an `AsyncMutex`. A call arriving while a sync runs sets `syncPending` and returns; the lock holder re-runs in a `do/while (syncPending)` loop, acknowledging the dirty set at the end of each non-fatal cycle (coalescing). Each cycle (`executeSyncOnce`) is wrapped by `executeWithRetry`, which retries up to `MAX_RETRIES = 3` with exponential backoff plus jitter (`2^(attempt-1) * 1000 * (0.5 + Math.random())` ms), honoring `Retry-After` (×1000) on 429/403. `AuthError`, a non-rate-limit 403, and 404 abort without retry; a fatal abort returns early and leaves the dirty set un-acknowledged so it is retried next run.
+
 ## Temperature modes
 
 The change detector selects a temperature based on the state of `LocalChangeTracker` and `SyncStateStore`:
@@ -22,17 +24,18 @@ Selected when `localTracker.isInitialized()` returns true and `getDirtyPaths()` 
 - Takes the union of local dirty paths and remote changed paths (from `getChangedPaths()`)
 - Calls `stat()` on each path for both local and remote filesystems
 - Calls `stateStore.getMany()` for the affected paths only
-- Filters results through `hasChanged()` / `hasRemoteChanged()` to prune no-ops
+- Prunes no-ops via explicit cases (in order): both sides absent → keep only if a baseline exists (cleanup); no baseline → always keep (new file); local absent but remote present → always keep (rename/delete source); otherwise keep iff `hasChanged(local)` or `hasRemoteChanged(remote)`. Entries with neither side nor a baseline are dropped first.
 - Most efficient mode during steady-state operation
 
 ### Warm -- O(n) local + O(delta) remote
 
-Selected when sync records exist but the tracker is not initialized (e.g. after plugin reload without local changes).
+Selected when the hot condition fails (tracker uninitialized, or initialized but with no dirty paths) and `stateStore.getAll()` is non-empty. Typical cases: a focus/visibility/online sync with no pending local edits, or the first sync after plugin reload.
 
 - Calls `localFs.list()` for a full local listing
 - Calls `getChangedPaths()` for the remote delta
 - Compares the full local listing against all stored `SyncRecord`s to find local changes and deletions
 - Confirms every would-be local deletion against the authoritative filesystem (`confirmLocalDeletions`) so an under-reporting `list()` cannot delete an on-disk file — see [Deletion safety](#deletion-safety)
+- Unions both endpoints (newPath and oldPath) of every local rename pair from `getRenamePairs()` into the changed set, so warm mode produces the delete_remote+push actions the rename optimizer consumes
 - Calls `remoteFs.stat()` only for paths identified as changed
 
 ### Cold -- O(n)
@@ -59,15 +62,19 @@ Uses `AsyncPool(10)` for parallel local reads. Per-file errors are caught and sk
 
 After initial-match enrichment, `enrichHashesForRenames()` runs for entries that are rename destinations (from `localTracker.getRenamePairs()`). In warm/cold mode, `list()` returns `hash: ""`, but the rename optimizer needs SHA-256 to verify content equivalence. This step calls `stat()` on rename destination entries to compute their hash. Only the `hash` field is updated; `mtime` and `size` from `list()` are preserved.
 
+`collectChanges()` runs three post-collection steps in order: `enrichHashesForInitialMatch` (all modes, `AsyncPool(10)`), `enrichHashesForRenames` (all modes, unthrottled `Promise.all`), and — warm mode only — `confirmLocalDeletions` (`AsyncPool(10)`; see [Deletion safety](#deletion-safety)).
+
 ## Change detection
 
 ### Local changes
 
-`LocalChangeTracker` (`local-tracker.ts`) tracks dirty paths in memory via a `Set<string>`. Vault events (`create`, `modify`, `delete`) call `markDirty(path)`. The `rename` event calls `markRenamed(newPath, oldPath)`, which records the pair in a `renamePairs` map (used by the rename optimizer) and marks both paths dirty. Rename chains are collapsed (A→B→C becomes A→C). After a successful sync cycle, `acknowledge(paths)` clears dirty paths, rename pairs, and sets `initialized = true`.
+`LocalChangeTracker` (`local-tracker.ts`) tracks dirty paths in memory via a `Set<string>`. Vault events (`create`, `modify`, `delete`) call `markDirty(path)`. The `rename` event calls `markRenamed(newPath, oldPath)`, which records the pair in a `renamePairs` map (used by the rename optimizer) and marks both paths dirty. Rename chains are collapsed (A→B→C becomes A→C). After a successful sync cycle, `acknowledge(paths)` deletes the given paths from the dirty set and the file `renamePairs` map (keyed by `newPath`), unconditionally clears the entire `folderRenamePairs` map, and sets `initialized = true`.
+
+Folder renames are tracked separately: a `rename` event whose target is a `TFolder` routes to `markFolderRenamed(newPath, oldPath)`, recording the pair in a distinct `folderRenamePairs` map (also chain-collapsing A→B→C to A→C), while files go to `markRenamed`. Unlike `markRenamed`, this does not mark any path dirty. The orchestrator reads `getFolderRenamePairs()` and passes it into `refinePlan()` as a separate argument, where `coalesceLocalFolderRenames` consumes it.
 
 ### Remote changes
 
-`IFileSystem.getChangedPaths()` returns `{ modified, deleted, renamed? }` or `null`. For Google Drive, this calls the changes.list API via `applyIncrementalChanges()`, which updates the metadata cache and returns the set of affected paths. The `renamed` array contains `{ oldPath, newPath }` pairs detected during incremental sync (file moved or renamed on Drive). When a full scan is triggered (token expired or first run), `fullScanWithDelta()` computes the delta by comparing the persisted metadata snapshot against the new cache by Drive file ID, detecting renames, additions, and deletions. Returns `null` only on initial sync (no prior cache).
+`IFileSystem.getChangedPaths()` returns `{ modified, deleted, renamed? }` or `null`. `null` means no incremental data is available — fall back to warm/cold detection. The `renamed` array carries `{ oldPath, newPath, isFolder? }` pairs for native rename optimization. For the Google Drive implementation of this contract (changes.list, the 410 full-scan delta, fullScanWithDelta), see [Incremental sync](google-drive-backend.md#incremental-sync) and [Cache invalidation](google-drive-backend.md#cache-invalidation).
 
 ### Comparison functions
 
@@ -103,8 +110,10 @@ After initial-match enrichment, `enrichHashesForRenames()` runs for entries that
 | yes | missing | missing | -- | -- | `cleanup` |
 | no | exists | missing | -- | -- | `push` |
 | no | missing | exists | -- | -- | `pull` |
-| no | exists | exists | same hash+size | same hash+size | `match` |
-| no | exists | exists | (otherwise) | (otherwise) | `conflict` |
+| no | exists | exists | local.hash && remote.hash && equal hashes && equal sizes | (n/a) | `match` |
+| no | exists | exists | any hash empty, or hash/size mismatch | (n/a) | `conflict` |
+
+For no-baseline rows the localChanged/remoteChanged columns do not apply — `hasChanged`/`hasRemoteChanged` are not evaluated. `match` requires BOTH hashes present and equal plus equal sizes; because `list()` returns `hash: ""`, an unenriched entry has empty hashes and routes to `conflict` even when sizes match — see [Hash enrichment](#hash-enrichment).
 
 ## Deletion safety
 
@@ -112,7 +121,7 @@ There is no volume-based abort gate. Deletion safety rests on three independent 
 
 1. **Decision rules** -- an ambiguous case (a file gone on one side while the surviving side changed since baseline) is routed to `conflict` (keep both), never to a deletion; a missing baseline never yields a deletion.
 2. **layoutReady gate** -- sync does not run before the Obsidian vault index is loaded. `SyncScheduler` defers its event wiring, and `runSync()` is gated on `app.workspace.layoutReady`, so a `list()` that under-reports during startup cannot be mistaken for mass local deletions.
-3. **Authoritative absence** -- a would-be local deletion (a baseline path missing from the in-memory `list()`) is re-`stat()`'d against the filesystem before it is acted on. `LocalFs.stat()` falls back to the vault adapter on an index miss, and warm change detection runs `confirmLocalDeletions()` over every such candidate; a file that still exists on disk is restored to the entry and never deleted. Only a genuine absence (gone on disk too) propagates. Deletions are additionally soft -- to trash on both sides -- so even a correct deletion stays recoverable.
+3. **Authoritative absence** -- a would-be local deletion (a baseline path missing from the in-memory `list()`) is re-`stat()`'d against the filesystem before it is acted on. `LocalFs.stat()` falls back to the vault adapter on an index miss. Only warm change detection runs `confirmLocalDeletions()` (hot and cold do not), re-`stat()`-ing each candidate (an entry with a prior baseline but no `local`: `!e.local && e.prevSync`) via `AsyncPool(10)`; a non-directory file found on disk has its `entry.local` restored, moving it out of the deletion branches. Only a genuine absence (gone on disk too, or `stat()` returns null/throws) propagates. Deletions are additionally soft -- to trash on both sides -- so even a correct deletion stays recoverable.
 
 ## Rename optimization
 
@@ -130,7 +139,7 @@ When `LocalChangeTracker` records a rename pair (from Obsidian's `rename` event)
 When `getChangedPaths()` reports a rename pair, the optimizer matches `delete_local(oldPath) + pull(newPath)` → `rename_local`. The rename pair from the backend is authoritative, so no hash verification is needed.
 
 - **File renames** (`optimizeRemoteFileRenames`): Matches individual rename pairs from the backend.
-- **Folder renames** (`coalesceRemoteFolderRenames`): When a folder-level rename pair has `isFolder: true`, scans actions for every `delete_local` child under the old folder prefix and coalesces them into a single `rename_local` with `isFolder: true`. A child whose matching `pull` is missing (remote-deleted, ignore-filtered, or dropped by a partial sync) is still absorbed as a move descendant — leaving a standalone `delete_local` would fire after the folder has physically moved and strand the moved file without a baseline, which a later sync would resurrect via `push`. Folding it in rewrites the baseline to the new path instead, so a genuine remote deletion propagates safely as a `delete_local` next cycle (bias toward safe deletion). **Destination occupancy** is the exception. The optimization's value is collapsing N delete+pull pairs into one atomic `localFs.rename` of the folder — but that single move throws when the destination already exists, and there is no partial folder rename, so it cannot apply when the new prefix is already occupied. Detection: if any action under the new prefix carries a local entity (`a.local` — proof a local file already exists there), the folder is skipped (`destination_occupied`). We then fall back to the unoptimized plan — the per-file `delete_local`/`pull`/`push`/`conflict` actions never move the folder as a unit, so each path is created/deleted independently with no destination collision, and the folder converges file-by-file. Skipping is the honest non-optimized behavior, not a workaround. This detection is best-effort — an in-sync file or pre-existing empty/ignored folder under the new prefix produces no action, so the move is still attempted and the resulting `localFs.rename` failure is caught per-action and recovers next cycle. Remaining file-level pairs fall through to individual file rename optimization.
+- **Folder renames** (`coalesceRemoteFolderRenames`): When a folder-level rename pair has `isFolder: true`, coalesce every `delete_local` child under the old prefix into one `rename_local` (`isFolder: true`). Rules: (1) Absorb a descendant whose matching `pull` is missing into the rename — rewrite its baseline to the new path; a genuine remote delete then propagates as `delete_local` next cycle (bias toward safe deletion). (2) Skip the whole folder (reason `destination_occupied`) if any action under the new prefix has a non-null local entity (`a.local != null`), falling back to the per-file actions. Detection is best-effort; a per-action `localFs.rename` failure is caught and recovers next cycle. See `optimize-remote-renames.ts` for rationale. Remaining file-level pairs fall through to individual file rename optimization.
 
 ### Observability
 
@@ -147,26 +156,26 @@ Each optimization step returns `RenameOptResult` with `applied` (successful rena
 | C | `delete_local` | Serial | Avoids local filesystem conflicts |
 | D | `conflict` | Serial | May show UI modal (`ask` strategy) |
 
-Each action calls `executeAction()` which runs `runActionIO()` followed by `commitAction()`. `AuthError` is re-thrown to abort the entire sync; all other errors are caught per-action and recorded in `result.failed`.
+Groups A/B/C use `executeAction()`, which runs `runActionIO()` followed by `commitAction()` and records success in `result.succeeded`. Group D (conflict) uses `executeConflictAction()` instead: it runs `resolveConflict()` per the configured strategy, re-stats both local and remote sides, commits, and records the action in both `result.conflicts` and `result.succeeded`. In both paths, `AuthError` is re-thrown to abort the entire sync; all other errors are caught per-action and recorded in `result.failed`.
 
 ## State commit
 
 `commitAction()` in `state-committer.ts` persists state per successfully-executed action:
 
-- `push` / `pull` / `match` / `conflict`: upsert `SyncRecord` via `stateStore.put()`. If `enableThreeWayMerge` is on and the file is merge-eligible (text, <=1 MB), stores the file content via `stateStore.putContent()` for future 3-way merge base.
-- `rename_remote` / `rename_local`: delete old path record, upsert new path record (+ optional 3-way merge content).
+- `push` / `pull` / `match` / `conflict`: upsert `SyncRecord` via `stateStore.put()`. If `enableThreeWayMerge` is on and the file is merge-eligible (`isMergeEligible`: byte size <= 1 MiB (`MAX_MERGE_SIZE = 1024*1024`) and the file extension is in the fixed `TEXT_EXTENSIONS` allowlist — .md/.txt/.json/.canvas/.css/.js/.ts/... — not a content sniff), stores the file content via `stateStore.putContent()` for future 3-way merge base.
+- `rename_remote` / `rename_local`: for a folder rename (`isFolder` with `descendants`), call `stateStore.rewritePaths(descendants)` to remap every child baseline (and any stored merge-base content) old→new path in one IndexedDB transaction. For a single file: delete the old-path record, upsert the new-path record (+ optional 3-way merge content).
 - `delete_local` / `delete_remote` / `cleanup`: delete `SyncRecord` via `stateStore.delete()`.
 
 Failed actions are not committed; they will be re-detected on the next sync cycle.
 
 ## Sync triggers
 
-`SyncScheduler` (`scheduler.ts`) registers five event-driven sync triggers on `start()`:
+`SyncScheduler` (`scheduler.ts`) registers six event-driven sync triggers (wired by five `wire*` methods, since `wireVaultEvents()` covers both the Vault change and Vault rename rows below). Wiring happens in `wireAll()`, gated on `workspace.layoutReady`: if the layout is already ready, `start()` calls `wireAll()` immediately; otherwise it defers via `workspace.onLayoutReady(() => wireAll())`. `wireAll()` no-ops if the plugin was destroyed before the layout became ready.
 
 | Trigger | Event | Behaviour |
 |---------|-------|-----------|
 | Vault change | `create` / `modify` / `delete` | Marks path dirty via `localTracker.markDirty()`, then calls `debouncedSync()` (5 s debounce). Consecutive edits reset the timer so sync fires 5 s after the last change. |
-| Vault rename | `rename` | Calls `localTracker.markRenamed(newPath, oldPath)` which records the rename pair and marks both paths dirty, then calls `debouncedSync()`. |
+| Vault rename | `rename` | Calls `localTracker.markRenamed(newPath, oldPath)` which records the rename pair and marks both paths dirty, then calls `debouncedSync()`. Folder targets call `markFolderRenamed` instead. If either endpoint is ignore-excluded, the rename is not recorded as a pair; each non-excluded endpoint is marked dirty, and the debounce fires only if at least one endpoint is non-excluded. |
 | Visibility | `document.visibilitychange` → `"visible"` | Immediately calls `runSync()` when the app returns to the foreground (e.g. mobile app switch, desktop minimize restore), unless a sync is already running. |
 | Focus | `window.focus` | Immediately calls `runSync()` when the window gains focus (e.g. switching back from another desktop app), unless a sync is already running. |
 | Online | `window.online` | Immediately calls `runSync()` when the network connection is restored. |
@@ -178,8 +187,10 @@ All triggers are event-driven — there is no periodic timer. All triggers excep
 
 `SyncScheduler.wireFileOpenEvent()` hooks the `file-open` workspace event. When a user opens a file:
 
-1. Skip if a sync is already running
+1. Ignore null file (e.g. closing the active pane)
 2. Look up the file's `SyncRecord`
 3. Call `stat()` on both local and remote
 4. If remote has changed (`hasRemoteChanged`) but local has NOT changed (`hasChanged`), call `orchestrator.pullSingle(path)` to immediately pull the latest version
 5. This gives the user the freshest content immediately on file open
+
+Unlike the focus/visibility/online triggers, the file-open handler does not check `isSyncing()` and does not skip when a sync is already running. `pullSingle()` acquires the same `syncMutex` that `runSync()` uses, so the priority pull queues behind any in-flight sync (the `AsyncMutex` enqueues the waiter rather than dropping it) instead of being skipped. The record lookup and `stat()` checks (steps 2-4) run before `pullSingle`, so they execute concurrently with an in-flight sync; only the actual pull is serialized.
