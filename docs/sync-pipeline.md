@@ -32,6 +32,7 @@ Selected when sync records exist but the tracker is not initialized (e.g. after 
 - Calls `localFs.list()` for a full local listing
 - Calls `getChangedPaths()` for the remote delta
 - Compares the full local listing against all stored `SyncRecord`s to find local changes and deletions
+- Confirms every would-be local deletion against the authoritative filesystem (`confirmLocalDeletions`) so an under-reporting `list()` cannot delete an on-disk file — see [Deletion safety](#deletion-safety)
 - Calls `remoteFs.stat()` only for paths identified as changed
 
 ### Cold -- O(n)
@@ -111,7 +112,7 @@ There is no volume-based abort gate. Deletion safety rests on three independent 
 
 1. **Decision rules** -- an ambiguous case (a file gone on one side while the surviving side changed since baseline) is routed to `conflict` (keep both), never to a deletion; a missing baseline never yields a deletion.
 2. **layoutReady gate** -- sync does not run before the Obsidian vault index is loaded. `SyncScheduler` defers its event wiring, and `runSync()` is gated on `app.workspace.layoutReady`, so a `list()` that under-reports during startup cannot be mistaken for mass local deletions.
-3. **Soft-delete + self-heal** -- both backends delete to trash, and a file deleted from an incomplete listing is re-pushed on the next full sync (its local copy persists on disk), so an erroneous deletion is recoverable.
+3. **Authoritative absence** -- a would-be local deletion (a baseline path missing from the in-memory `list()`) is re-`stat()`'d against the filesystem before it is acted on. `LocalFs.stat()` falls back to the vault adapter on an index miss, and warm change detection runs `confirmLocalDeletions()` over every such candidate; a file that still exists on disk is restored to the entry and never deleted. Only a genuine absence (gone on disk too) propagates. Deletions are additionally soft -- to trash on both sides -- so even a correct deletion stays recoverable.
 
 ## Rename optimization
 

@@ -36,7 +36,7 @@ src/
 │   ├── conflict.ts                  # resolveWithStrategy() — low-level strategy implementations
 │   ├── merge.ts                     # threeWayMerge() — git-style merge via diffIndices
 │   ├── orchestrator.ts              # SyncOrchestrator — retry loop, mutex, status transitions
-│   ├── scheduler.ts                 # SyncScheduler — vault events, timers, file-open priority sync
+│   ├── scheduler.ts                 # SyncScheduler — vault events, timers, file-open sync, layout-ready gate
 │   ├── state.ts                     # SyncStateStore — IndexedDB persistence for SyncRecords
 │   ├── error.ts                     # getErrorInfo(), isRateLimitError(), sleep()
 │   ├── conflict-history.ts          # ConflictHistory — JSON audit log per device
@@ -252,7 +252,7 @@ interface IFileSystem {
 
 Key design points:
 
-- `list()` may return `hash: ""` for performance; use `stat()` when an accurate hash is needed.
+- `list()` may return `hash: ""` for performance; use `stat()` when an accurate hash is needed. `LocalFs.stat()` is authoritative: on a vault-index miss it falls back to the filesystem adapter, so a not-yet-indexed file on disk is never reported absent (absence drives deletions).
 - `getChangedPaths()` is optional. When implemented (e.g. Google Drive changes.list), it enables the hot change-detection path. The `renamed` field allows backends to report file moves for native rename optimization.
 - `delete()` is idempotent. Backends may use soft deletion (trash).
 - `write()` auto-creates parent directories.

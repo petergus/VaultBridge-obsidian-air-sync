@@ -23,6 +23,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 - `main.ts` handles lifecycle only; delegate logic to separate modules
 - Split files at ~200-300 lines
 - Register listeners via `this.register*` (prevent leaks)
+- The in-memory vault index can under-report before layout-ready: read it only via `LocalFs.list()` (lint-enforced — `getAllLoadedFiles()` is restricted outside `src/fs/local/`), and never derive a deletion from listing-absence alone — confirm against the authoritative `LocalFs.stat()` (falls back to the adapter)
 - Prefer `async/await`
 - Mobile compatible (`isDesktopOnly: false`) — no Node/Electron APIs
 - Minimize network calls; require explicit disclosure
