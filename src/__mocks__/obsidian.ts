@@ -22,8 +22,10 @@ export function debounce<T extends (...args: unknown[]) => unknown>(
 	return debounced as unknown as T & { cancel: () => void };
 }
 
-export const requestUrl = async (_opts: unknown): Promise<unknown> => {
-	throw new Error("requestUrl not mocked for this test");
+export const requestUrl = (_opts: unknown): Promise<unknown> => {
+	// Returns a REJECTED promise (not a synchronous throw) to match the real
+	// requestUrl contract — tests replace this via spyRequestUrl() before use.
+	return Promise.reject(new Error("requestUrl not mocked for this test"));
 };
 
 export class Notice {
@@ -143,10 +145,10 @@ export class Vault {
 		{ type: "file" | "folder"; content?: ArrayBuffer; mtime?: number }
 	>();
 	adapter = {
-		exists: async (path: string): Promise<boolean> => {
-			return this.files.has(path);
+		exists: (path: string): Promise<boolean> => {
+			return Promise.resolve(this.files.has(path));
 		},
-		stat: async (
+		stat: (
 			path: string,
 		): Promise<{
 			type: "file" | "folder";
@@ -154,20 +156,21 @@ export class Vault {
 			mtime: number;
 		} | null> => {
 			const entry = this.files.get(path);
-			if (!entry) return null;
-			return {
+			if (!entry) return Promise.resolve(null);
+			return Promise.resolve({
 				type: entry.type,
 				size: entry.content?.byteLength ?? 0,
 				mtime: entry.mtime ?? 0,
-			};
+			});
 		},
 		readBinary: async (path: string): Promise<ArrayBuffer> => {
 			const entry = this.files.get(path);
 			if (!entry || entry.type !== "file")
 				throw new Error(`File not found: ${path}`);
-			return entry.content ?? new ArrayBuffer(0);
+			// Stays async so the not-found throw rejects.
+			return await Promise.resolve(entry.content ?? new ArrayBuffer(0));
 		},
-		list: async (
+		list: (
 			dir: string,
 		): Promise<{ files: string[]; folders: string[] }> => {
 			const files: string[] = [];
@@ -182,9 +185,9 @@ export class Vault {
 					else files.push(p);
 				}
 			}
-			return { files, folders };
+			return Promise.resolve({ files, folders });
 		},
-		writeBinary: async (
+		writeBinary: (
 			path: string,
 			data: ArrayBuffer,
 			options?: { mtime?: number },
@@ -194,11 +197,13 @@ export class Vault {
 				content: data,
 				mtime: options?.mtime,
 			});
+			return Promise.resolve();
 		},
-		remove: async (path: string): Promise<void> => {
+		remove: (path: string): Promise<void> => {
 			this.files.delete(path);
+			return Promise.resolve();
 		},
-		rmdir: async (path: string, _recursive?: boolean): Promise<void> => {
+		rmdir: (path: string, _recursive?: boolean): Promise<void> => {
 			const prefix = path + "/";
 			const toDelete: string[] = [];
 			for (const key of this.files.keys()) {
@@ -209,6 +214,7 @@ export class Vault {
 			for (const key of toDelete) {
 				this.files.delete(key);
 			}
+			return Promise.resolve();
 		},
 	};
 
@@ -235,23 +241,27 @@ export class Vault {
 			throw new Error("Folder already exists.");
 		}
 		this.files.set(path, { type: "folder" });
-		return new TFolder(path);
+		// Stays async so the already-exists throw rejects.
+		return await Promise.resolve(new TFolder(path));
 	}
 
 	async readBinary(file: TFile): Promise<ArrayBuffer> {
 		const entry = this.files.get(file.path);
 		if (!entry || entry.type !== "file")
 			throw new Error(`File not found: ${file.path}`);
-		return entry.content ?? new ArrayBuffer(0);
+		// Stays async so the not-found throw rejects.
+		return await Promise.resolve(entry.content ?? new ArrayBuffer(0));
 	}
 
-	async createBinary(
+	createBinary(
 		path: string,
 		content: ArrayBuffer,
 		options?: { mtime?: number },
 	): Promise<TFile> {
 		this.files.set(path, { type: "file", content, mtime: options?.mtime });
-		return new TFile(path, content.byteLength, options?.mtime ?? 0);
+		return Promise.resolve(
+			new TFile(path, content.byteLength, options?.mtime ?? 0),
+		);
 	}
 
 	async modifyBinary(
@@ -264,6 +274,8 @@ export class Vault {
 			throw new Error(`File not found: ${file.path}`);
 		entry.content = content;
 		if (options?.mtime !== undefined) entry.mtime = options.mtime;
+		// Stays async so the not-found throw rejects.
+		await Promise.resolve();
 	}
 
 	getAllLoadedFiles(): (TFile | TFolder)[] {
@@ -291,6 +303,8 @@ export class Vault {
 		if (!entry) throw new Error(`File not found: ${file.path}`);
 		this.files.delete(file.path);
 		this.files.set(newPath, entry);
+		// Stays async so the not-found throw rejects.
+		await Promise.resolve();
 	}
 }
 

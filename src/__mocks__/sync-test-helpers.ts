@@ -61,10 +61,12 @@ export function createMockFs(name: string): IFileSystem & {
 	return {
 		name,
 		files,
-		async list() {
+		list() {
 			// Return fresh entities (real backends build a new FileEntity per call);
 			// a caller mutating a listing result must not corrupt stored state.
-			return Array.from(files.values()).map((f) => ({ ...f.entity }));
+			return Promise.resolve(
+				Array.from(files.values()).map((f) => ({ ...f.entity })),
+			);
 		},
 		async stat(path: string) {
 			path = normalizeSyncPath(path);
@@ -86,7 +88,9 @@ export function createMockFs(name: string): IFileSystem & {
 			if (entry.entity.isDirectory) {
 				throw new Error(`Not a file (is a directory): ${path}`);
 			}
-			return entry.content.slice(0);
+			// Stays async so the throws above reject (tests assert .rejects);
+			// `await Promise.resolve` satisfies require-await for the sync body.
+			return await Promise.resolve(entry.content.slice(0));
 		},
 		async write(path: string, content: ArrayBuffer, mtime: number) {
 			path = normalizeSyncPath(path);
@@ -111,9 +115,12 @@ export function createMockFs(name: string): IFileSystem & {
 			return { ...entity, hash: await sha256(content) };
 		},
 		async mkdir(path: string) {
-			return mkdirInternal(normalizeSyncPath(path));
+			// Stays async so mkdirInternal's type-collision throw rejects.
+			return await Promise.resolve(
+				mkdirInternal(normalizeSyncPath(path)),
+			);
 		},
-		async listDir(dirPath: string) {
+		listDir(dirPath: string) {
 			const prefix = normalizeSyncPath(dirPath) + "/";
 			const entities: FileEntity[] = [];
 			for (const [p, f] of files) {
@@ -124,16 +131,19 @@ export function createMockFs(name: string): IFileSystem & {
 					entities.push({ ...f.entity });
 				}
 			}
-			return entities;
+			return Promise.resolve(entities);
 		},
-		async delete(path: string) {
+		delete(path: string) {
 			path = normalizeSyncPath(path);
 			const prefix = path + "/";
 			for (const key of [...files.keys()]) {
 				if (key === path || key.startsWith(prefix)) files.delete(key);
 			}
+			return Promise.resolve();
 		},
 		async rename(oldPath: string, newPath: string) {
+			// Stays async so the validation throws below reject (tests assert .rejects).
+			await Promise.resolve();
 			oldPath = normalizeSyncPath(oldPath);
 			newPath = normalizeSyncPath(newPath);
 			validateRename(oldPath, newPath);
@@ -179,28 +189,30 @@ export function createMockStateStore(): {
 		contents,
 		async open() {},
 		async close() {},
-		async get(path: string) {
-			return records.get(path);
+		get(path: string) {
+			return Promise.resolve(records.get(path));
 		},
-		async getMany(paths: string[]) {
+		getMany(paths: string[]) {
 			const result = new Map<string, SyncRecord>();
 			for (const p of paths) {
 				const r = records.get(p);
 				if (r !== undefined) result.set(p, r);
 			}
-			return result;
+			return Promise.resolve(result);
 		},
-		async getAll() {
-			return Array.from(records.values());
+		getAll() {
+			return Promise.resolve(Array.from(records.values()));
 		},
-		async put(record: SyncRecord) {
+		put(record: SyncRecord) {
 			records.set(record.path, record);
+			return Promise.resolve();
 		},
-		async delete(path: string) {
+		delete(path: string) {
 			records.delete(path);
 			contents.delete(path);
+			return Promise.resolve();
 		},
-		async rewritePaths(renames: RenamePair[]) {
+		rewritePaths(renames: RenamePair[]) {
 			for (const { oldPath, newPath } of renames) {
 				const record = records.get(oldPath);
 				if (record) {
@@ -217,16 +229,19 @@ export function createMockStateStore(): {
 					contents.set(newPath, content);
 				}
 			}
+			return Promise.resolve();
 		},
-		async clear() {
+		clear() {
 			records.clear();
 			contents.clear();
+			return Promise.resolve();
 		},
-		async putContent(path: string, content: ArrayBuffer) {
+		putContent(path: string, content: ArrayBuffer) {
 			contents.set(path, content);
+			return Promise.resolve();
 		},
-		async getContent(path: string) {
-			return contents.get(path);
+		getContent(path: string) {
+			return Promise.resolve(contents.get(path));
 		},
 	} as unknown as {
 		records: Map<string, SyncRecord>;

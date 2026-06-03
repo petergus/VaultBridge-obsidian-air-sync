@@ -9,10 +9,10 @@ import {
 // round-trips through write → stat. It must satisfy the same remote change-
 // detection contract as every real backend. It is NOT checksumBased (no
 // backendMeta.contentChecksum), so the metadata-touch case does not apply.
-runRemoteChangeDetectionContract("createMockFs", async () => {
+runRemoteChangeDetectionContract("createMockFs", () => {
 	const fs = createMockFs("remote");
 	const path = "note.md";
-	return {
+	return Promise.resolve({
 		async observeWritten() {
 			await fs.write(path, bytes("version one"), 1000);
 			return statOrThrow(fs, path);
@@ -28,5 +28,5 @@ runRemoteChangeDetectionContract("createMockFs", async () => {
 			);
 			return statOrThrow(fs, path);
 		},
-	};
+	});
 });

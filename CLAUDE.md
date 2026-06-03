@@ -49,7 +49,7 @@ Always pass `npm run lint && npm run build && npm test` after making changes.
 - Pass `createMockStateStore()` directly (its intersection type satisfies `SyncStateStore`)
 
 ### No `async` without `await`
-- Never write `async` functions or arrow functions that contain no `await` expression — fix the code, do not disable the lint rule
+- Enforced by `@typescript-eslint/require-await` (error). Never write `async` functions or arrow functions that contain no `await` expression — fix the code, do not disable the lint rule
 - Mock functions that only throw: use `() => { throw err; }` (synchronous, no `async`)
 - Mock functions with mixed throw/return: ensure at least one `await` (e.g. `return await Promise.resolve(...)`)
 - Mock functions that return a value synchronously but must return a Promise: use `() => Promise.resolve(value)` (no `async`)
@@ -63,6 +63,23 @@ Always pass `npm run lint && npm run build && npm test` after making changes.
 - `eslint-disable` directives must include a description explaining why (e.g. `// eslint-disable-next-line rule-name -- reason here`)
 - Do not disable rules that the obsidianmd plugin disallows (`obsidianmd/no-tfile-tfolder-cast`, `obsidianmd/ui/sentence-case`, `@typescript-eslint/no-explicit-any`, etc.) — fix the code instead
 - Do not write unnecessary type assertions. If `.buffer` is already `ArrayBuffer`, do not cast `as ArrayBuffer`
+
+### Design-principle guards (lint-enforced)
+
+Several ARCHITECTURE.md design principles are enforced as lint rules in `eslint.config.mts` (each error message names its principle). Fix the code rather than disabling these:
+
+- **Principle #2 (swappable backends)** — `sync/`, `main.ts`, `store/`, `queue/`, `utils/` must not import backend-specific modules (`**/fs/googledrive/**`). Wire backends only through `fs/registry.ts`; `ui/` may render backend-specific settings.
+- **Principle #4 (pipeline as data)** — the pure transform stages (`decision-engine`, `change-compare`, `merge`, `rename-optimizer`, `optimize-local-renames`, `optimize-remote-renames`) must not import `fs/interface` (IFileSystem) or call `Date.now()` / `Math.random()`. Keep them deterministic `data → data` functions; pass timestamps in as data. To add a new pure transform, list it in `PURE_TRANSFORMS` in `eslint.config.mts`.
+- **Principle #7 (single responsibility per module)** — `max-lines` caps production modules at 300 code lines (comments/blanks excluded). Three modules are grandfathered at their current size in `eslint.config.mts` and pinned so they cannot grow — split them to ratchet down; do not raise a cap. Tests/mocks are exempt.
+- **Mobile compatibility** — no Node/Electron API imports (`fs`, `path`, `os`, `child_process`, `crypto`, `electron`, `node:*`) anywhere in `src/`.
+- **Vault index** — read it via `LocalFs.list()`; `getAllLoadedFiles()` is allowed only in `src/fs/local/` (see Coding conventions above).
+- **Coverage floors** — `vitest.config.ts` sets ratchet thresholds enforced by CI (`npm run test:coverage`). Raise them as coverage improves; never lower them to make CI pass.
+
+Principles that can't be expressed as a static rule are pinned by tests instead — keep these green when touching the pipeline:
+
+- **#3 delta-first** — `sync/delta-first.test.ts`: the hot path stats only dirty paths and never calls `list()` (full scans are cold-start only).
+- **#5 crash-safe** — `sync/crash-safety.test.ts` (interrupted action commits no baseline, re-syncs to convergence) and `sync/convergence.test.ts` (fixed point).
+- **Command-ID immutability** — `main-commands.test.ts` snapshots the registered command IDs; update it only for a genuinely new command, never to rename a shipped ID.
 
 ## Build artifacts
 
