@@ -3,6 +3,14 @@ import { Logger, LoggerAdapter, getDeviceName } from "./logger";
 import type { AirSyncSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
 
+// The vitest environment is node, where `window` is undefined. Logger's
+// constructor calls window.setInterval (and dispose() window.clearInterval), so
+// stub a minimal window that delegates to the real global timers.
+vi.stubGlobal("window", {
+	setInterval: globalThis.setInterval.bind(globalThis),
+	clearInterval: globalThis.clearInterval.bind(globalThis),
+});
+
 function createMockAdapter(): LoggerAdapter & {
 	written: Map<string, string>;
 	dirs: Set<string>;
