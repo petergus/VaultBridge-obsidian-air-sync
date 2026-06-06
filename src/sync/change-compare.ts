@@ -35,8 +35,15 @@ export function hasChanged(file: FileEntity, record: SyncRecord): boolean {
  * reliable when mtime is missing or unreliable) → content hash → conservative.
  */
 export function hasRemoteChanged(file: FileEntity, record: SyncRecord): boolean {
-	const fileChecksum = file.remoteChecksum?.value;
-	const recordChecksum = record.remoteChecksum?.value;
+	// Only compare checksums of the same algorithm. A backend uses one algo per
+	// vault, so an algo mismatch (or a missing side) means "not comparable" and we
+	// fall through to hash/conservative rather than risk a cross-algorithm verdict.
+	const fc = file.remoteChecksum;
+	const rc = record.remoteChecksum;
+	const checksumChanged =
+		fc !== undefined && rc !== undefined && fc.algo === rc.algo
+			? fc.value !== rc.value
+			: undefined;
 
 	if (file.mtime > 0 && record.remoteMtime > 0) {
 		if (file.mtime === record.remoteMtime && file.size === record.remoteSize) {
@@ -46,15 +53,15 @@ export function hasRemoteChanged(file: FileEntity, record: SyncRecord): boolean 
 			}
 			return false;
 		}
-		// mtime/size differ — check checksum before concluding changed
-		if (fileChecksum && recordChecksum) {
-			return fileChecksum !== recordChecksum;
+		// mtime/size differ — trust the checksum if comparable, else conservative
+		if (checksumChanged !== undefined) {
+			return checksumChanged;
 		}
 		return true;
 	}
-	// Use backend-provided checksum when available (e.g. Drive md5, pCloud content hash)
-	if (fileChecksum && recordChecksum) {
-		return fileChecksum !== recordChecksum;
+	// Use backend-provided checksum when comparable (e.g. Drive md5, pCloud content hash)
+	if (checksumChanged !== undefined) {
+		return checksumChanged;
 	}
 	if (file.hash && record.hash) {
 		return file.hash !== record.hash;

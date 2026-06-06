@@ -1,6 +1,6 @@
 import type { FileEntity } from "../types";
 import type { DriveFile } from "./types";
-import { FOLDER_MIME } from "./types";
+import { FOLDER_MIME, toRemoteChecksum } from "./types";
 import type { Logger } from "../../logging/logger";
 import { INTERNAL_METADATA_PATH } from "../../sync/remote-vault";
 
@@ -300,9 +300,7 @@ export class DriveMetadataCache {
 			size: parseInt(driveFile.size || "0", 10),
 			mtime: Number.isNaN(parsedMtime) ? 0 : parsedMtime,
 			hash: "",
-			remoteChecksum: driveFile.md5Checksum
-				? { algo: "md5", value: driveFile.md5Checksum }
-				: undefined,
+			remoteChecksum: toRemoteChecksum(driveFile),
 			backendMeta: { driveId: driveFile.id },
 		};
 	}

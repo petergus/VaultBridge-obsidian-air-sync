@@ -185,4 +185,16 @@ describe("hasRemoteChanged", () => {
 		const record = makeRecord({ remoteMtime: 1000, remoteChecksum: { algo: "md5", value: "aaa" } });
 		expect(hasRemoteChanged(file, record)).toBe(true);
 	});
+
+	it("different-algorithm checksums are not comparable → falls through to hash (unchanged)", () => {
+		const file = makeFile({ mtime: 0, hash: "abc", remoteChecksum: { algo: "sha1", value: "x" } });
+		const record = makeRecord({ remoteMtime: 0, hash: "abc", remoteChecksum: { algo: "md5", value: "y" } });
+		expect(hasRemoteChanged(file, record)).toBe(false);
+	});
+
+	it("different-algorithm checksums + differing mtime → conservative changed (not raw-value compared)", () => {
+		const file = makeFile({ mtime: 2000, remoteChecksum: { algo: "sha1", value: "same" } });
+		const record = makeRecord({ remoteMtime: 1000, remoteChecksum: { algo: "md5", value: "same" } });
+		expect(hasRemoteChanged(file, record)).toBe(true);
+	});
 });

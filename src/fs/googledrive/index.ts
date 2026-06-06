@@ -1,6 +1,6 @@
 import type { IFileSystem } from "../interface";
 import type { FileEntity } from "../types";
-import { FOLDER_MIME } from "./types";
+import { FOLDER_MIME, toRemoteChecksum } from "./types";
 import type { DriveFile } from "./types";
 import type { DriveClient } from "./client";
 import type { MetadataStore } from "../../store/metadata-store";
@@ -358,9 +358,7 @@ export class GoogleDriveFs implements IFileSystem {
 				? new Date(driveFile.modifiedTime).getTime()
 				: 0,
 			hash,
-			remoteChecksum: driveFile.md5Checksum
-				? { algo: "md5", value: driveFile.md5Checksum }
-				: undefined,
+			remoteChecksum: toRemoteChecksum(driveFile),
 			backendMeta: { driveId: driveFile.id },
 		};
 	}

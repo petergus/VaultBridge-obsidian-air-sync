@@ -16,6 +16,25 @@ import type { DriveFile } from "./types";
 import type { GoogleDriveBackendData } from "./provider";
 import { setBackendSecret, getBackendSecret, hasBackendSecret, clearBackendSecrets } from "../token-store";
 
+interface DriveTokens {
+	refreshToken: string;
+	accessToken: string;
+}
+
+/** Read the Drive refresh+access tokens from SecretStorage. */
+function readDriveTokens(store: ISecretStore, type: string): DriveTokens {
+	return {
+		refreshToken: getBackendSecret(store, type, "refresh"),
+		accessToken: getBackendSecret(store, type, "access"),
+	};
+}
+
+/** Persist the Drive refresh+access tokens to SecretStorage (empty values are skipped). */
+function storeDriveTokens(store: ISecretStore, type: string, tokens: DriveTokens): void {
+	setBackendSecret(store, type, "refresh", tokens.refreshToken);
+	setBackendSecret(store, type, "access", tokens.accessToken);
+}
+
 /**
  * Parse auth callback input (URL from auth server containing tokens or code).
  * Built-in flow: obsidian://air-sync-auth?access_token=...&refresh_token=...&expires_in=...&state=...
@@ -118,8 +137,7 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 		const tokens = auth.getTokenState();
 
 		// Store tokens in SecretStorage instead of returning them for backendData
-		setBackendSecret(this.secretStore, this.backendType, "refresh", tokens.refreshToken);
-		setBackendSecret(this.secretStore, this.backendType, "access", tokens.accessToken);
+		storeDriveTokens(this.secretStore, this.backendType, tokens);
 
 		return {
 			accessTokenExpiry: tokens.accessTokenExpiry,
@@ -173,10 +191,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 
 	createFs(app: App, settings: AirSyncSettings, logger?: Logger): IFileSystem | null {
 		const data = this.getData(settings);
-		const tokens = {
-			refreshToken: getBackendSecret(this.secretStore, this.type, "refresh"),
-			accessToken: getBackendSecret(this.secretStore, this.type, "access"),
-		};
+		const tokens = readDriveTokens(this.secretStore, this.type);
 		if (!tokens.refreshToken || !data.remoteVaultFolderId) return null;
 
 		const googleAuth = this.auth.getOrCreateGoogleAuth(data, logger);
@@ -228,8 +243,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		// Store refreshed tokens in SecretStorage (not in backendData)
 		const tokens = this.auth.getTokenState();
 		if (tokens && tokens.refreshToken) {
-			setBackendSecret(this.secretStore, this.type, "refresh", tokens.refreshToken);
-			setBackendSecret(this.secretStore, this.type, "access", tokens.accessToken);
+			storeDriveTokens(this.secretStore, this.type, tokens);
 			result.accessTokenExpiry = tokens.accessTokenExpiry;
 		}
 
@@ -243,10 +257,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		logger?: Logger,
 	): Promise<RemoteVaultResolution> {
 		const data = this.getData(settings);
-		const tokens = {
-			refreshToken: getBackendSecret(this.secretStore, this.type, "refresh"),
-			accessToken: getBackendSecret(this.secretStore, this.type, "access"),
-		};
+		const tokens = readDriveTokens(this.secretStore, this.type);
 		const googleAuth = this.auth.getOrCreateGoogleAuth(data, logger);
 		googleAuth.setTokens(tokens.refreshToken, tokens.accessToken, data.accessTokenExpiry);
 		const client = new DriveClient((force) => googleAuth.getAccessToken(force), logger);
