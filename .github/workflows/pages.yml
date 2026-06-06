@@ -27,13 +27,9 @@ jobs:
             url: ${{ steps.deployment.outputs.page_url }}
         steps:
             - uses: actions/checkout@v6
-            # The custom domain (airsync.takezo.dev) is intentionally NOT enabled
-            # yet: drop the CNAME so this deploy serves from the default
-            # <owner>.github.io/<repo>/ URL and does not claim the domain that the
-            # air-sync-auth repo still holds. To switch the domain over later,
-            # remove this step and set the domain in Settings > Pages.
-            - name: Drop CNAME (custom domain not enabled yet)
-              run: rm -f pages/CNAME
+            # pages/CNAME (airsync.takezo.dev) is uploaded as-is so the site is
+            # served from the custom domain. The domain was released by the
+            # air-sync-auth repo, so this repo can claim it.
             - name: Configure Pages
               uses: actions/configure-pages@v5
               with:
