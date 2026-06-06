@@ -71,6 +71,35 @@ export interface IBackendProvider {
 	): Promise<RemoteVaultResolution>;
 
 	/**
+	 * Open a web-hosted folder picker (e.g. the Dropbox Chooser on the OAuth relay)
+	 * in the browser. The selection returns asynchronously via an `obsidian://`
+	 * deep link and is bound by {@link completeWebFolderPick}. Returns backendData
+	 * to persist (e.g. a CSRF nonce). Optional: only backends with a web picker
+	 * implement it.
+	 */
+	startWebFolderPick?(settings: AirSyncSettings): Promise<Record<string, unknown>>;
+
+	/**
+	 * Bind the vault to the folder selected by {@link startWebFolderPick}, given the
+	 * deep-link params. Validates the selection (CSRF state, reachability with the
+	 * current token) and returns the backend data to persist. Throws on an invalid
+	 * or inaccessible selection.
+	 */
+	completeWebFolderPick?(
+		params: Record<string, string | undefined>,
+		settings: AirSyncSettings,
+		vaultName: string,
+		logger?: Logger,
+	): Promise<RemoteVaultResolution>;
+
+	/**
+	 * Resolve the bound remote vault's current path for display, from its stored id
+	 * (the path itself is not persisted). Optional: backends that don't address by
+	 * id, or that display the id directly, omit it. May make a network call.
+	 */
+	getRemoteVaultDisplayPath?(settings: AirSyncSettings, logger?: Logger): Promise<string | null>;
+
+	/**
 	 * Disconnect the backend: revoke auth and reset all backend state.
 	 * Returns the reset backendData to persist.
 	 */

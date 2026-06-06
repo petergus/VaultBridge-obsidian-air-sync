@@ -118,6 +118,71 @@ export class BackendManager {
 		await this.deps.saveSettings();
 	}
 
+	/**
+	 * Open the backend's web folder picker (e.g. Dropbox Chooser). The selection
+	 * returns asynchronously via a deep link → {@link completeBackendFolderPick}.
+	 */
+	async startBackendFolderPick(): Promise<void> {
+		const settings = this.deps.getSettings();
+		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
+		this.backendProvider = provider;
+		if (!provider?.startWebFolderPick) {
+			this.deps.notify("This backend has no folder picker.");
+			return;
+		}
+		try {
+			const type = provider.type;
+			const current = settings.backendData[type] ?? {};
+			const updates = await provider.startWebFolderPick(settings);
+			settings.backendData[type] = { ...current, ...updates };
+			await this.deps.saveSettings();
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.deps.getLogger().error("Failed to start folder pick", { message: msg });
+			this.deps.notify(`Folder picker failed: ${msg}`);
+		}
+	}
+
+	/** Bind the folder selected via the web picker, then re-init against the new target. */
+	async completeBackendFolderPick(params: Record<string, string | undefined>): Promise<void> {
+		if (this.connecting) return;
+		const settings = this.deps.getSettings();
+		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
+		this.backendProvider = provider;
+		if (!provider?.completeWebFolderPick) {
+			this.deps.notify("This backend has no folder picker.");
+			return;
+		}
+
+		// Hold `connecting` across the bind so a scheduled sync can't start against the
+		// old target mid-rebind (the orchestrator gates on isBackendConnecting()).
+		this.connecting = true;
+		try {
+			const type = provider.type;
+			const result = await provider.completeWebFolderPick(
+				params, settings, this.deps.getVaultName(), this.deps.getLogger(),
+			);
+			settings.backendData[type] = { ...(settings.backendData[type] ?? {}), ...result.backendUpdates };
+			// New target → drop the previous folder's delta cursor, and persist it now
+			// (not just in-memory) so a reload before the next sync can't load a stale
+			// cursor against the newly-bound folder.
+			provider.resetTargetState?.(settings);
+			await this.deps.saveSettings();
+			this.deps.notify("Remote folder updated");
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.deps.getLogger().error("Failed to bind picked folder", { message: msg });
+			this.deps.notify(`Folder selection failed: ${msg}`);
+			return;
+		} finally {
+			this.connecting = false;
+		}
+		// Re-init detects the new identity, clears sync state, and builds an FS
+		// against the chosen folder.
+		await this.initBackend();
+		this.deps.refreshSettingsDisplay();
+	}
+
 	/** Start the backend's auth/connection flow */
 	async startBackendConnect(): Promise<void> {
 		const settings = this.deps.getSettings();
@@ -163,7 +228,8 @@ export class BackendManager {
 			settings.backendData[type] = { ...backendData, ...updates };
 			await this.deps.saveSettings();
 
-			// Resolve remote vault before creating FS
+			// Resolve remote vault before creating FS (auto-creates /<vault> by
+			// default; the user can rebind later via the web folder picker).
 			if (this.backendProvider.resolveRemoteVault) {
 				await this.resolveRemoteVault(this.backendProvider, settings);
 			}
@@ -180,6 +246,7 @@ export class BackendManager {
 			this.deps.notify(
 				`Connected to ${this.backendProvider.displayName}`
 			);
+			this.deps.refreshSettingsDisplay();
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this.deps.getLogger().error("Authorization failed", { message: msg });

@@ -1,0 +1,292 @@
+import type { App } from "obsidian";
+import { Platform } from "obsidian";
+import { getBackendData } from "../backend";
+import type { IBackendProvider } from "../backend";
+import type { ISecretStore } from "../secret-store";
+import type { IFileSystem } from "../interface";
+import type { AirSyncSettings } from "../../settings";
+import type { Logger } from "../../logging/logger";
+import type { RemoteVaultResolution } from "../../sync/remote-vault";
+import { MetadataStore } from "../../store/metadata-store";
+import { DropboxClient } from "./client";
+import { DropboxFs } from "./index";
+import { DropboxAuthProvider, DropboxAuth } from "./auth";
+import type { DropboxEntry } from "./types";
+import { DropboxApiError } from "./types";
+import { getBackendSecret, setBackendSecret, hasBackendSecret, clearBackendSecrets } from "../token-store";
+
+// Note: the shared REMOTE_VAULT_ROOT wrapper folder is intentionally NOT used —
+// Dropbox's App Folder scope already namespaces the app, so the vault lives at
+// /<vault> directly (see resolveRemoteVault).
+
+const BACKEND_TYPE = "dropbox";
+
+/** All data stored in backendData["dropbox"] (tokens live in SecretStorage). */
+export interface DropboxBackendData {
+	/**
+	 * Stable folder id (`id:…`) of the remote vault — the SOLE remote address.
+	 * The FS addresses everything by this id (`id:<id>/<subpath>`); the folder's
+	 * absolute path is never stored — it's resolved from the id on demand (for the
+	 * settings display and to relativize listings), so a remote move/rename needs
+	 * no migration.
+	 */
+	remoteVaultFolderId: string;
+	lastKnownVaultName: string;
+	/** Incremental `list_folder` cursor. */
+	cursor: string;
+	accessTokenExpiry: number;
+	pendingCodeVerifier: string;
+	pendingAuthState: string;
+	/** CSRF nonce for an in-flight web folder pick (Dropbox Chooser); cleared on completion. */
+	pendingFolderPickState: string;
+}
+
+const DEFAULT_DROPBOX_DATA: DropboxBackendData = {
+	remoteVaultFolderId: "",
+	lastKnownVaultName: "",
+	cursor: "",
+	accessTokenExpiry: 0,
+	pendingCodeVerifier: "",
+	pendingAuthState: "",
+	pendingFolderPickState: "",
+};
+
+/**
+ * Web page (on the OAuth relay domain) that hosts the Dropbox Chooser. The plugin
+ * opens it in the browser; the page bounces the selection back to
+ * `obsidian://air-sync-folder?id=…&name=…&state=…` (a backend-agnostic scheme,
+ * not the auth one), mirroring the auth relay. The page's domain must be
+ * whitelisted in the Dropbox app's Chooser settings, or it shows "App is misconfigured".
+ */
+const FOLDER_PICKER_URL = "https://airsync.takezo.dev/dropbox-folder";
+
+/** Random hex nonce for the folder-pick CSRF `state`. */
+function randomState(): string {
+	const arr = new Uint8Array(24);
+	crypto.getRandomValues(arr);
+	let out = "";
+	for (const b of arr) out += b.toString(16).padStart(2, "0");
+	return out;
+}
+
+/**
+ * Dropbox backend provider — in-plugin PKCE (worker-less), App Folder scope.
+ *
+ * Addressing is path-based: the remote vault is `/<vault>` directly under the
+ * App Folder root (the App Folder scope already namespaces the app, so no
+ * obsidian-air-sync/ wrapper is needed). The delta cursor is committed only on a
+ * fully-successful sync; refreshed tokens are written back to SecretStorage.
+ */
+export class DropboxProvider implements IBackendProvider {
+	readonly type = BACKEND_TYPE;
+	readonly displayName = "Dropbox";
+	readonly auth: DropboxAuthProvider;
+
+	constructor(private secretStore: ISecretStore) {
+		this.auth = new DropboxAuthProvider(secretStore);
+	}
+
+	private getData(settings: AirSyncSettings): DropboxBackendData {
+		return { ...DEFAULT_DROPBOX_DATA, ...getBackendData<DropboxBackendData>(settings, BACKEND_TYPE) };
+	}
+
+	/** Build a token-bearing client from the stored secrets + expiry. */
+	private makeClient(data: DropboxBackendData, logger?: Logger): DropboxClient {
+		return this.clientFromAuth(this.auth.getOrCreateAuth(logger), data, logger);
+	}
+
+	/**
+	 * A client backed by a throwaway auth, isolated from the shared FS-bound token
+	 * manager — for one-off reads (settings folder-path display) that may run
+	 * concurrently with a live sync and must not reset its in-memory tokens.
+	 */
+	private makeDetachedClient(data: DropboxBackendData, logger?: Logger): DropboxClient {
+		return this.clientFromAuth(this.auth.createDetachedAuth(logger), data, logger);
+	}
+
+	private clientFromAuth(auth: DropboxAuth, data: DropboxBackendData, logger?: Logger): DropboxClient {
+		auth.setTokens(
+			getBackendSecret(this.secretStore, BACKEND_TYPE, "refresh"),
+			getBackendSecret(this.secretStore, BACKEND_TYPE, "access"),
+			data.accessTokenExpiry,
+		);
+		return new DropboxClient((force) => auth.getAccessToken(force), logger);
+	}
+
+	createFs(_app: App, settings: AirSyncSettings, logger?: Logger): IFileSystem | null {
+		const data = this.getData(settings);
+		const hasToken =
+			hasBackendSecret(this.secretStore, BACKEND_TYPE, "refresh") ||
+			hasBackendSecret(this.secretStore, BACKEND_TYPE, "access");
+		// The folder id is the sole remote address; the FS resolves any path it needs
+		// from it on demand.
+		if (!hasToken || !data.remoteVaultFolderId) return null;
+
+		const client = this.makeClient(data, logger);
+		const metadataStore = new MetadataStore<DropboxEntry>(
+			`${settings.vaultId}-${data.remoteVaultFolderId}`,
+			{ dbNamePrefix: "air-sync-dropbox", version: 1 },
+		);
+		const fs = new DropboxFs(client, data.remoteVaultFolderId, logger, metadataStore);
+		if (data.cursor) fs.cursor = data.cursor;
+		return fs;
+	}
+
+	isConnected(settings: AirSyncSettings): boolean {
+		const hasToken =
+			hasBackendSecret(this.secretStore, BACKEND_TYPE, "refresh") ||
+			hasBackendSecret(this.secretStore, BACKEND_TYPE, "access");
+		return hasToken && !!this.getData(settings).remoteVaultFolderId;
+	}
+
+	getIdentity(settings: AirSyncSettings): string | null {
+		const id = this.getData(settings).remoteVaultFolderId;
+		return id ? `${BACKEND_TYPE}:${id}` : null;
+	}
+
+	resetTargetState(settings: AirSyncSettings): void {
+		const data = settings.backendData[BACKEND_TYPE];
+		if (data) delete data.cursor;
+	}
+
+	hasCheckpoint(settings: AirSyncSettings): boolean {
+		return !!this.getData(settings).cursor;
+	}
+
+	readBackendState(fs: IFileSystem, commitCheckpoint: boolean): Record<string, unknown> {
+		if (!(fs instanceof DropboxFs)) return {};
+		const result: Record<string, unknown> = {};
+		// Advance the persisted cursor only on full success; on a partial cycle leave
+		// it at the last committed value so the next run re-detects the gap.
+		if (commitCheckpoint && fs.cursor) result.cursor = fs.cursor;
+
+		// The remote path is never persisted — it's resolved from the folder id when
+		// needed (settings display / relativizing listings).
+
+		// Persist refreshed tokens (access may have rotated; refresh usually stable).
+		const tokens = this.auth.getTokenState();
+		if (tokens && (tokens.refreshToken || tokens.accessToken)) {
+			setBackendSecret(this.secretStore, BACKEND_TYPE, "refresh", tokens.refreshToken);
+			setBackendSecret(this.secretStore, BACKEND_TYPE, "access", tokens.accessToken);
+			result.accessTokenExpiry = tokens.accessTokenExpiry;
+		}
+		return result;
+	}
+
+	async resolveRemoteVault(
+		_app: App,
+		settings: AirSyncSettings,
+		vaultName: string,
+		logger?: Logger,
+	): Promise<RemoteVaultResolution> {
+		const data = this.getData(settings);
+		let folderId = data.remoteVaultFolderId;
+
+		if (!folderId) {
+			// First connect: create `/<vault>` directly under the App Folder root (the
+			// App Folder scope already namespaces the app, so no wrapper folder). An
+			// empty name is refused rather than collapsing the root to "/".
+			if (!vaultName.trim()) {
+				throw new Error("Cannot resolve the Dropbox remote vault: the vault name is empty.");
+			}
+			const client = this.makeClient(data, logger);
+			const vault = await client.createFolder(`/${vaultName}`);
+			folderId = vault.id ?? "";
+		}
+		// Already bound: the folder is tracked by its stable id, so a LOCAL vault rename
+		// does NOT rename/move the remote folder. We only refresh lastKnownVaultName so
+		// BackendManager's name-equality short-circuit keeps skipping this call.
+
+		return {
+			backendUpdates: { remoteVaultFolderId: folderId, lastKnownVaultName: vaultName },
+		};
+	}
+
+	/**
+	 * Open the Dropbox Chooser (hosted on the relay domain) in the browser. The
+	 * selection returns via `obsidian://air-sync-folder` and is bound by
+	 * {@link completeWebFolderPick}. Returns the CSRF state to persist.
+	 */
+	startWebFolderPick(_settings: AirSyncSettings): Promise<Record<string, unknown>> {
+		const state = randomState();
+		const url = `${FOLDER_PICKER_URL}?state=${encodeURIComponent(state)}`;
+		if (Platform.isMobile) {
+			window.location.href = url;
+		} else {
+			window.open(url);
+		}
+		return Promise.resolve({ pendingFolderPickState: state });
+	}
+
+	/**
+	 * Bind the vault to a folder picked via the Chooser. Validates the CSRF state,
+	 * then confirms the chosen id is reachable with the App Folder token via
+	 * `get_metadata` — the Chooser browses the whole Dropbox, but an App Folder
+	 * token can only address ids inside `/Apps/<App>/`, so a folder picked outside
+	 * it is rejected with a clear message rather than silently failing to sync.
+	 */
+	async completeWebFolderPick(
+		params: Record<string, string | undefined>,
+		settings: AirSyncSettings,
+		vaultName: string,
+		logger?: Logger,
+	): Promise<RemoteVaultResolution> {
+		const data = this.getData(settings);
+		const expectedState = data.pendingFolderPickState;
+		if (!expectedState || params.state !== expectedState) {
+			throw new Error("State mismatch - possible CSRF attack");
+		}
+		const rawId = params.id?.trim();
+		if (!rawId) throw new Error("No folder was selected.");
+		const id = rawId.startsWith("id:") ? rawId : `id:${rawId}`;
+
+		const client = this.makeClient(data, logger);
+		let entry: DropboxEntry;
+		try {
+			entry = await client.getMetadata(id);
+		} catch (err) {
+			// Only a genuine not_found means the folder is outside the app folder (an
+			// App Folder token sees inaccessible paths as missing). Transient/auth/
+			// rate-limit errors must surface as themselves so the user reconnects or
+			// retries instead of being told to re-pick a perfectly valid folder.
+			if (err instanceof DropboxApiError && err.summary.includes("not_found")) {
+				logger?.warn("Picked Dropbox folder is outside the app folder", { id });
+				throw new Error(
+					"That folder isn't inside the Air Sync app folder, so it can't be synced. Pick a folder under Apps/Air Sync/.",
+				);
+			}
+			throw err;
+		}
+		if (entry[".tag"] !== "folder") {
+			throw new Error("Please select a folder, not a file.");
+		}
+
+		return {
+			backendUpdates: {
+				remoteVaultFolderId: entry.id ?? id,
+				lastKnownVaultName: vaultName,
+				pendingFolderPickState: "",
+			},
+		};
+	}
+
+	/**
+	 * Resolve the bound folder's current absolute path from its id, for display in
+	 * settings. The path is not stored — this reflects the folder's live location
+	 * (so a remote move/rename shows up). Returns null if not bound.
+	 */
+	async getRemoteVaultDisplayPath(settings: AirSyncSettings, logger?: Logger): Promise<string | null> {
+		const data = this.getData(settings);
+		if (!data.remoteVaultFolderId) return null;
+		// Detached client so this UI read can't reset the live sync's shared tokens.
+		const client = this.makeDetachedClient(data, logger);
+		const meta = await client.getMetadata(data.remoteVaultFolderId);
+		return meta.path_display ?? null;
+	}
+
+	async disconnect(_settings: AirSyncSettings): Promise<Record<string, unknown>> {
+		await this.auth.revokeAuth();
+		clearBackendSecrets(this.secretStore, BACKEND_TYPE, ["access", "refresh"]);
+		return { ...DEFAULT_DROPBOX_DATA };
+	}
+}

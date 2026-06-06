@@ -45,6 +45,38 @@ through the auth server.
 Unlike the built-in flow (`/google/callback` on the Worker), no server-side token
 exchange happens — the authorization code is passed through as-is.
 
+**Dropbox reuses this same page — no Worker route.** Dropbox auth is in-plugin
+Authorization Code + PKCE, so its callback returns `?code=...&state=...` exactly
+like custom Google OAuth. The plugin generates the relay-compatible
+`{app:"obsidian-plugin", nonce}` state, Dropbox redirects here, and this page
+bounces it to `obsidian://air-sync-auth`, where the plugin exchanges the code for
+tokens directly with Dropbox (the `code_verifier` is the proof — no client secret,
+no `/dropbox/callback` Worker route). In short: the Worker is the **confidential**
+path (server-held secret, needed only by built-in Google); `pages/callback` is the
+**no-secret** path, shared by custom Google (PKCE) and Dropbox (PKCE).
+
+## `pages/dropbox-folder/`
+
+Hosts the **Dropbox Chooser** so the user can pick which remote folder a vault
+syncs into. The plugin can't load the remote `dropins.js` inside Obsidian (remote
+code is disallowed, and the Chooser validates the page origin), so it opens this
+page in the browser — the same indirection as auth. The page loads the Chooser,
+the user picks a folder, and it bounces the result to
+`obsidian://air-sync-folder?id=…&name=…&state=…` (a backend-agnostic scheme,
+kept separate from `air-sync-auth`), which `BackendManager.completeBackendFolderPick`
+routes to the active backend's `completeWebFolderPick` to bind.
+
+Two App-Folder caveats the code handles, because the Chooser **always browses the
+whole Dropbox and can't be limited to the app folder**:
+
+- Air Sync uses App Folder scope, so its token can only address ids under
+  `/Apps/Air Sync/`. `DropboxProvider.completeWebFolderPick` verifies the picked
+  id with `get_metadata` and rejects anything outside the app folder with a clear
+  message rather than silently failing to sync.
+- The page must be added to the **Chooser domain allowlist** in the Dropbox App
+  Console (and the Chooser/Drop-ins capability enabled), or the Chooser renders
+  "App is misconfigured" (`No valid entry page detected`).
+
 ## Infrastructure
 
 | Domain | Host | Purpose |

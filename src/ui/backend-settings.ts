@@ -1,6 +1,7 @@
 import type { App } from "obsidian";
 import type { AirSyncSettings } from "../settings";
 import { GoogleDriveSettingsRenderer, GoogleDriveCustomSettingsRenderer } from "./googledrive-settings";
+import { DropboxSettingsRenderer } from "./dropbox-settings";
 
 /** Actions that settings renderers can invoke for connection flow UI */
 export interface BackendConnectionActions {
@@ -8,6 +9,8 @@ export interface BackendConnectionActions {
 	completeAuth(code: string): Promise<void>;
 	disconnect(): Promise<void>;
 	refreshDisplay(): void;
+	/** Open the backend's web folder picker (e.g. Dropbox Chooser), if it has one. */
+	startFolderPick(): Promise<void>;
 }
 
 /**
@@ -33,6 +36,7 @@ export interface IBackendSettingsRenderer {
 const renderers: IBackendSettingsRenderer[] = [
 	new GoogleDriveSettingsRenderer(),
 	new GoogleDriveCustomSettingsRenderer(),
+	new DropboxSettingsRenderer(),
 ];
 
 const rendererMap = new Map<string, IBackendSettingsRenderer>();

@@ -215,6 +215,102 @@ describe("BackendManager — isConnected false with prior connection", () => {
 	});
 });
 
+describe("BackendManager — web folder pick", () => {
+	it("startBackendFolderPick persists the provider's returned state", async () => {
+		const settings = mockSettings();
+		const startSpy = vi.fn().mockResolvedValue({ pendingFolderPickState: "S" });
+		fakeProvider.startWebFolderPick = startSpy;
+		const deps = createDeps(settings);
+		const mgr = new BackendManager(deps);
+		await mgr.initBackend();
+
+		await mgr.startBackendFolderPick();
+
+		expect(startSpy).toHaveBeenCalled();
+		expect(settings.backendData.test).toMatchObject({ pendingFolderPickState: "S" });
+	});
+
+	it("notifies when the backend has no folder picker", async () => {
+		const settings = mockSettings();
+		delete fakeProvider.startWebFolderPick;
+		const deps = createDeps(settings);
+		const mgr = new BackendManager(deps);
+		await mgr.initBackend();
+
+		await mgr.startBackendFolderPick();
+
+		expect(deps.notify).toHaveBeenCalledWith("This backend has no folder picker.");
+	});
+
+	it("completeBackendFolderPick binds the result, drops the checkpoint (→ cold sync), and re-inits", async () => {
+		// Seed a committed delta checkpoint from the previous folder.
+		const settings = mockSettings({ backendData: { test: { cursor: "OLD-CURSOR" } } });
+		const completeSpy = vi.fn().mockResolvedValue({
+			backendUpdates: { remoteVaultFolderId: "id:new", pendingFolderPickState: "" },
+		});
+		fakeProvider.completeWebFolderPick = completeSpy;
+		// Real reset behaviour: clear the checkpoint so the next sync is a full cold reconcile.
+		fakeProvider.resetTargetState = (s) => { delete (s.backendData.test as Record<string, unknown>).cursor; };
+		const deps = createDeps(settings);
+		const onConnected = deps.onConnected as ReturnType<typeof vi.fn>;
+		const refreshSettingsDisplay = deps.refreshSettingsDisplay as ReturnType<typeof vi.fn>;
+		const saveSettings = deps.saveSettings as ReturnType<typeof vi.fn>;
+		const mgr = new BackendManager(deps);
+		await mgr.initBackend();
+		onConnected.mockClear();
+
+		await mgr.completeBackendFolderPick({ id: "id:new", state: "S" });
+
+		expect(completeSpy).toHaveBeenCalledWith(
+			{ id: "id:new", state: "S" }, settings, "Test Vault", expect.anything(),
+		);
+		expect(settings.backendData.test).toMatchObject({ remoteVaultFolderId: "id:new" });
+		// Changing folders drops the prior folder's delta cursor and persists it, so
+		// hasCheckpoint() is false and the next sync runs cold (full reconcile).
+		expect(settings.backendData.test?.cursor).toBeUndefined();
+		expect(saveSettings).toHaveBeenCalled();
+		expect(onConnected).toHaveBeenCalled(); // re-init created a fresh FS
+		expect(refreshSettingsDisplay).toHaveBeenCalled();
+	});
+
+	it("completeBackendFolderPick holds the connecting flag across the bind", async () => {
+		const settings = mockSettings();
+		let connectingDuringBind = false;
+		let release!: () => void;
+		const blocker = new Promise<void>((r) => { release = r; });
+		const mgr = new BackendManager(createDeps(settings));
+		await mgr.initBackend();
+		fakeProvider.completeWebFolderPick = vi.fn().mockImplementation(async () => {
+			connectingDuringBind = mgr.isConnecting();
+			await blocker;
+			return { backendUpdates: { remoteVaultFolderId: "id:new", pendingFolderPickState: "" } };
+		});
+
+		const done = mgr.completeBackendFolderPick({ id: "id:new", state: "S" });
+		await Promise.resolve();
+		expect(connectingDuringBind).toBe(true); // sync is gated out during the bind
+		release();
+		await done;
+		expect(mgr.isConnecting()).toBe(false);
+	});
+
+	it("completeBackendFolderPick notifies and does not re-init on a rejected selection", async () => {
+		const settings = mockSettings();
+		fakeProvider.completeWebFolderPick = vi.fn().mockRejectedValue(new Error("outside app folder"));
+		const deps = createDeps(settings);
+		const notify = deps.notify as ReturnType<typeof vi.fn>;
+		const onConnected = deps.onConnected as ReturnType<typeof vi.fn>;
+		const mgr = new BackendManager(deps);
+		await mgr.initBackend();
+		onConnected.mockClear();
+
+		await mgr.completeBackendFolderPick({ id: "id:bad", state: "S" });
+
+		expect(notify).toHaveBeenCalledWith("Folder selection failed: outside app folder");
+		expect(onConnected).not.toHaveBeenCalled();
+	});
+});
+
 describe("BackendManager — isConnecting flag", () => {
 	it("returns false before initBackend is called", () => {
 		const settings = mockSettings();
