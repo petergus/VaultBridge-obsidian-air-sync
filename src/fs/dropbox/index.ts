@@ -101,7 +101,7 @@ export class DropboxFs implements IFileSystem {
 		resolve: () => Promise<TResolved> | TResolved;
 		execute: (resolved: TResolved) => Promise<TResult>;
 		update: (resolved: TResolved, result: TResult) => void;
-		staleGuard: (resolved: TResolved) => { path: string; expectedId: string | undefined };
+		staleGuard: (resolved: TResolved) => { path: string; prior: DropboxEntry | undefined };
 		operationName: string;
 	}): Promise<{ resolved: TResolved; result: TResult }> {
 		const resolved = await this.cacheMutex.run(async () => {
@@ -110,8 +110,21 @@ export class DropboxFs implements IFileSystem {
 		});
 		const result = await opts.execute(resolved);
 		await this.cacheMutex.run(() => {
-			const { path, expectedId } = opts.staleGuard(resolved);
-			if (expectedId && this.cache.getEntry(path)?.id !== expectedId) {
+			const { path, prior } = opts.staleGuard(resolved);
+			const current = this.cache.getEntry(path);
+			// Guard the phase-3 cache write against a concurrent delta that touched this
+			// path while the network op (phase 2) ran. `prior` is the entry the op was
+			// resolved against:
+			//  - prior absent (creating a NEW path): skip if the path is now occupied.
+			//  - prior has an id (updating a known entry): skip if the path no longer
+			//    resolves to that id.
+			//  - prior is id-less (Dropbox metadata can lack an id): compare by reference
+			//    so a replacement object at the same path is detected.
+			let stale: boolean;
+			if (prior === undefined) stale = current !== undefined;
+			else if (prior.id !== undefined) stale = current?.id !== prior.id;
+			else stale = current !== prior;
+			if (stale) {
 				this.logger?.warn(`Skipping stale cache update for ${opts.operationName}`, { path });
 				return;
 			}
@@ -277,10 +290,10 @@ export class DropboxFs implements IFileSystem {
 			resolve: async () => {
 				const existing = this.cache.getEntry(path);
 				await this.ensureFolder(DropboxMetadataCache.parentPath(path));
-				return { existingId: existing?.id };
+				return { existing };
 			},
 			execute: () => this.client.upload(this.addr(path), content, mtime),
-			staleGuard: (r) => ({ path, expectedId: r.existingId }),
+			staleGuard: (r) => ({ path, prior: r.existing }),
 			update: (_r, result) => { this.cache.setEntry(path, result); },
 		});
 
@@ -323,7 +336,7 @@ export class DropboxFs implements IFileSystem {
 		const target = await this.cacheMutex.run(async () => {
 			await this.ensureInitialized();
 			const entry = this.cache.getEntry(path);
-			return entry ? { id: entry.id } : null;
+			return entry ? { entry, id: entry.id } : null;
 		});
 		if (!target) return;
 
@@ -331,7 +344,14 @@ export class DropboxFs implements IFileSystem {
 		await this.client.deletePath(target.id ?? this.addr(path));
 
 		await this.cacheMutex.run(() => {
-			if (this.cache.getEntry(path)?.id === target.id) this.cache.removeTree(path);
+			const current = this.cache.getEntry(path);
+			// Only remove if the path still refers to the SAME entry we deleted. Compare
+			// by id when present; for an id-less entry (Dropbox metadata can lack an id)
+			// fall back to reference identity — otherwise two id-less entries would both
+			// satisfy `undefined === undefined` and a concurrent delta's replacement at
+			// this path would be wrongly removed.
+			const same = target.id !== undefined ? current?.id === target.id : current === target.entry;
+			if (same) this.cache.removeTree(path);
 			else this.logger?.warn("Skipping stale cache update for delete", { path });
 		});
 	}
@@ -345,10 +365,10 @@ export class DropboxFs implements IFileSystem {
 				if (!entry) throw new Error(`File not found: ${oldPath}`);
 				if (this.cache.hasEntry(newPath)) throw new Error(`Destination already exists: ${newPath}`);
 				await this.ensureFolder(DropboxMetadataCache.parentPath(newPath));
-				return { id: entry.id, wasFolder: entry[".tag"] === "folder" };
+				return { prior: entry, wasFolder: entry[".tag"] === "folder" };
 			},
 			execute: () => this.client.move(this.addr(oldPath), this.addr(newPath)),
-			staleGuard: (r) => ({ path: oldPath, expectedId: r.id }),
+			staleGuard: (r) => ({ path: oldPath, prior: r.prior }),
 			update: (r, result) => {
 				this.cache.removeEntry(oldPath);
 				// move_v2's metadata may arrive without a `.tag` discriminator; stamp it

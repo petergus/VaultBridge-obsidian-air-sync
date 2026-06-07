@@ -135,6 +135,71 @@ describe("DropboxFs.write", () => {
 	});
 });
 
+describe("DropboxFs stale-cache guards (concurrent delta)", () => {
+	type CacheView = {
+		setEntry(path: string, entry: DropboxEntry): void;
+		getEntry(path: string): DropboxEntry | undefined;
+		hasEntry(path: string): boolean;
+	};
+
+	async function makeFsWithWarn() {
+		const { DropboxFs } = await import("./index");
+		const { DropboxClient } = await import("./client");
+		const warn = vi.fn();
+		const logger = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() } as unknown as import("../../logging/logger").Logger;
+		const client = new DropboxClient(() => Promise.resolve("AT"));
+		const fs = new DropboxFs(client, "id:root", logger);
+		(fs as unknown as DropboxFsInternal).initialized = true;
+		const cache = (fs as unknown as { cache: CacheView }).cache;
+		return { fs, cache, warn };
+	}
+
+	it("write: does not clobber a concurrent delta that created the same NEW path during upload", async () => {
+		const { fs, cache, warn } = await makeFsWithWarn();
+		(await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
+			const url = typeof opts === "string" ? opts : opts.url;
+			if (url.includes("/files/upload")) {
+				// Phase 2 (upload) runs outside the mutex — simulate a concurrent delta
+				// landing a DIFFERENT entry at the same path.
+				cache.setEntry("new.md", dbxFile("delta", "/root/new.md"));
+				return Promise.resolve(mockRes(untagged(dbxFile("uploaded", "/root/new.md"))));
+			}
+			return Promise.resolve(mockRes({}));
+		});
+
+		await fs.write("new.md", bytes("hi"), 0);
+
+		expect(cache.getEntry("new.md")?.id).toBe("id:delta");
+		expect(warn).toHaveBeenCalledWith("Skipping stale cache update for write", { path: "new.md" });
+	});
+
+	it("delete: keeps a concurrent replacement at an id-less path (reference identity, not undefined===undefined)", async () => {
+		const { fs, cache, warn } = await makeFsWithWarn();
+		// An id-less entry (Dropbox metadata can lack an id).
+		const idless = (): DropboxEntry => ({
+			".tag": "file", name: "x.md", path_lower: "/root/x.md", path_display: "/root/x.md",
+		});
+		cache.setEntry("x.md", idless());
+
+		(await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
+			const url = typeof opts === "string" ? opts : opts.url;
+			if (url.includes("delete_v2")) {
+				// Phase 2 (delete) runs outside the mutex — a concurrent delta replaces the
+				// id-less entry at this path with a NEW (also id-less) object.
+				cache.setEntry("x.md", idless());
+				return Promise.resolve(mockRes({}));
+			}
+			return Promise.resolve(mockRes({}));
+		});
+
+		await fs.delete("x.md");
+
+		// The replacement survives — the stale delete did not removeTree the wrong entry.
+		expect(cache.hasEntry("x.md")).toBe(true);
+		expect(warn).toHaveBeenCalledWith("Skipping stale cache update for delete", { path: "x.md" });
+	});
+});
+
 describe("DropboxFs.rename", () => {
 	it("keeps a moved folder classified as a folder even when move_v2 returns it untagged", async () => {
 		(await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
