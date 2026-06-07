@@ -3,7 +3,7 @@ import type { IFileSystem } from "../fs/interface";
 import type { IBackendProvider } from "../fs/backend";
 import type { Logger } from "../logging/logger";
 import { AsyncMutex } from "../queue/async-queue";
-import { isIgnored } from "../utils/ignore";
+import { isIgnored, isSystemJunkFile } from "../utils/ignore";
 import { isDotPathOutOfScope } from "../utils/path";
 import { INTERNAL_METADATA_PATH } from "./remote-vault";
 import { SyncStateStore } from "./state";
@@ -101,6 +101,11 @@ export class SyncOrchestrator {
 		// hides it; excluding it here keeps the exclusion symmetric (otherwise a
 		// local copy would be pushed, then deleted as a phantom remote deletion).
 		if (path === INTERNAL_METADATA_PATH) return true;
+		// OS-generated junk (desktop.ini, thumbs.db, .DS_Store) is never synced on any
+		// backend — treated as non-existent like the reserved metadata path. Beyond
+		// being noise, some backends (Dropbox) reject these outright, which would
+		// otherwise fail every cycle and block the delta checkpoint.
+		if (isSystemJunkFile(path)) return true;
 		// A path syncs only if it passes BOTH gates: the dot-path scope
 		// (hidden paths are in scope only when opted into syncDotPaths) AND
 		// the user's ignore patterns.
