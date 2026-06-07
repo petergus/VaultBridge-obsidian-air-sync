@@ -5,7 +5,7 @@ import type { Logger } from "../../logging/logger";
 import { AuthError } from "../errors";
 import { setBackendSecret, hasBackendSecret } from "../token-store";
 import { BaseOAuthTokenManager, buildOAuthState, computeS256Challenge, generateRandomString } from "../oauth-pkce";
-import type { DropboxTokenResponse } from "./types";
+import { assertDropboxTokenResponse } from "./types";
 
 const AUTHORIZE_URL = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
@@ -83,7 +83,8 @@ export class DropboxAuth extends BaseOAuthTokenManager {
 		if (res.status < 200 || res.status >= 300) {
 			throw new Error(`Token exchange failed: ${res.status} ${tokenErrorDetail(res)}`);
 		}
-		this.storeTokenResponse(res.json as DropboxTokenResponse);
+		assertDropboxTokenResponse(res.json);
+		this.storeTokenResponse(res.json);
 	}
 
 	protected async performRefresh(): Promise<string> {
@@ -112,7 +113,8 @@ export class DropboxAuth extends BaseOAuthTokenManager {
 		if (res.status < 200 || res.status >= 300) {
 			throw new Error(`Token refresh failed: ${res.status} ${tokenErrorDetail(res)}`);
 		}
-		this.storeTokenResponse(res.json as DropboxTokenResponse);
+		assertDropboxTokenResponse(res.json);
+		this.storeTokenResponse(res.json);
 		return this.accessToken;
 	}
 

@@ -51,7 +51,13 @@ describe("DropboxProvider.resolveRemoteVault", () => {
 			return Promise.resolve(mockRes({}));
 		});
 		const { provider } = await makeProvider(CONNECTED);
-		const res = await provider.resolveRemoteVault({} as never, settingsWith({}), "v");
+		// Fresh expiry → the cached access token is used directly, so the mocked
+		// requestUrl only serves the create_folder_v2 call under test (no token refresh).
+		const res = await provider.resolveRemoteVault(
+			{} as never,
+			settingsWith({ accessTokenExpiry: Date.now() + 3_600_000 }),
+			"v",
+		);
 
 		expect(res.backendUpdates).toMatchObject({
 			remoteVaultFolderId: "id:vault",

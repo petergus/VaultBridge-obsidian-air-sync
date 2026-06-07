@@ -55,6 +55,26 @@ export interface DropboxTokenResponse {
 	token_type?: string;
 }
 
+/**
+ * Validate a Dropbox token-endpoint response before storing it. A missing or
+ * non-numeric `expires_in` would otherwise make `accessTokenExpiry = NaN`, so the
+ * skew guard `now < expiry - 60s` is ALWAYS false → a token refresh on every
+ * single request. Reject such a response loudly instead.
+ */
+export function assertDropboxTokenResponse(json: unknown): asserts json is DropboxTokenResponse {
+	const obj = json as Record<string, unknown> | null;
+	if (
+		!obj ||
+		typeof obj !== "object" ||
+		typeof obj.access_token !== "string" ||
+		typeof obj.expires_in !== "number" ||
+		!Number.isFinite(obj.expires_in) ||
+		obj.expires_in <= 0
+	) {
+		throw new Error("Invalid Dropbox token response: missing or invalid access_token / expires_in");
+	}
+}
+
 /** Shape of a Dropbox JSON error body (RPC and content endpoints share it). */
 interface DropboxErrorBody {
 	error_summary?: string;

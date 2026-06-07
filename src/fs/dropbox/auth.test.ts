@@ -116,6 +116,18 @@ describe("DropboxAuthProvider.completeAuth", () => {
 			auth.completeAuth("obsidian://air-sync-auth?state=abc", { pendingAuthState: "abc", pendingCodeVerifier: "v" }),
 		).rejects.toThrow("Missing code");
 	});
+
+	it("rejects a token response missing expires_in (avoids a NaN expiry → refresh-every-call)", async () => {
+		// The exchange succeeds (200) but the body has no expires_in.
+		(await spyRequestUrl()).mockResolvedValue(mockRes({ access_token: "AT" }));
+		const { auth } = await makeProvider();
+		await expect(
+			auth.completeAuth("obsidian://air-sync-auth?code=THECODE&state=abc", {
+				pendingAuthState: "abc",
+				pendingCodeVerifier: "verifier-xyz",
+			}),
+		).rejects.toThrow(/Invalid Dropbox token response/);
+	});
 });
 
 describe("DropboxAuthProvider detached auth refresh-token rotation", () => {

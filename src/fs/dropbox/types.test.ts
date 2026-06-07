@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
 	assertOk,
+	assertDropboxTokenResponse,
 	DropboxApiError,
 	isDropboxResetError,
 	parseDropboxTime,
@@ -45,6 +46,26 @@ describe("assertOk", () => {
 			expect(err).toBeInstanceOf(DropboxApiError);
 			expect((err as DropboxApiError).status).toBe(429);
 		}
+	});
+});
+
+describe("assertDropboxTokenResponse", () => {
+	it("accepts a well-formed token response", () => {
+		expect(() => assertDropboxTokenResponse({ access_token: "AT", expires_in: 14400 })).not.toThrow();
+		expect(() => assertDropboxTokenResponse({ access_token: "AT", refresh_token: "RT", expires_in: 14400 })).not.toThrow();
+	});
+
+	it("rejects a missing or non-numeric expires_in (would make accessTokenExpiry NaN)", () => {
+		expect(() => assertDropboxTokenResponse({ access_token: "AT" })).toThrow(/Invalid Dropbox token response/);
+		expect(() => assertDropboxTokenResponse({ access_token: "AT", expires_in: "14400" })).toThrow(/Invalid Dropbox token response/);
+		expect(() => assertDropboxTokenResponse({ access_token: "AT", expires_in: 0 })).toThrow(/Invalid Dropbox token response/);
+		expect(() => assertDropboxTokenResponse({ access_token: "AT", expires_in: Number.NaN })).toThrow(/Invalid Dropbox token response/);
+	});
+
+	it("rejects a missing access_token and non-objects", () => {
+		expect(() => assertDropboxTokenResponse({ expires_in: 14400 })).toThrow(/Invalid Dropbox token response/);
+		expect(() => assertDropboxTokenResponse(null)).toThrow(/Invalid Dropbox token response/);
+		expect(() => assertDropboxTokenResponse("nope")).toThrow(/Invalid Dropbox token response/);
 	});
 });
 
