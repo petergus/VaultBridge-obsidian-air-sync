@@ -3,6 +3,7 @@ import type AirSyncPlugin from "../main";
 import type { ConflictStrategy } from "../sync/types";
 import { getAllBackendProviders, getBackendProvider } from "../fs/registry";
 import { getBackendSettingsRenderer } from "./backend-settings";
+import { parseLines } from "../utils/parse-lines";
 
 export class AirSyncSettingTab extends PluginSettingTab {
 	plugin: AirSyncPlugin;
@@ -119,12 +120,11 @@ export class AirSyncSettingTab extends PluginSettingTab {
 						this.plugin.settings.syncDotPaths.join("\n")
 					)
 					.onChange(async (value) => {
-						const paths = value
-							.split("\n")
-							.map((line) => line.trim().replace(/\/+$/, ""))
-							.filter((line) => line.length > 0)
-							.filter((line) => line.startsWith("."));
-						this.plugin.settings.syncDotPaths = [...new Set(paths)];
+						this.plugin.settings.syncDotPaths = parseLines(value, {
+							stripTrailingSlash: true,
+							requirePrefix: ".",
+							dedupe: true,
+						});
 						await this.plugin.saveSettings();
 					})
 			);
@@ -138,13 +138,9 @@ export class AirSyncSettingTab extends PluginSettingTab {
 						this.plugin.settings.ignorePatterns.join("\n")
 					)
 					.onChange(async (value) => {
-						// Trim and drop blank lines (parallels syncDotPaths). Trailing
-						// slashes are meaningful in gitignore (dir-only), so unlike dot
-						// paths we deliberately do NOT strip them here.
-						this.plugin.settings.ignorePatterns = value
-							.split("\n")
-							.map((line) => line.trim())
-							.filter((line) => line.length > 0);
+						// Trailing slashes are meaningful in gitignore (dir-only), so unlike
+						// dot paths we deliberately do NOT strip them here.
+						this.plugin.settings.ignorePatterns = parseLines(value);
 						await this.plugin.saveSettings();
 					})
 			);
