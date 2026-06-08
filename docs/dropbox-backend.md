@@ -108,8 +108,8 @@ the shared no-secret relay page (the `callback/` page in the
 directly with Dropbox. Refreshing an access token needs only the `client_id`.
 
 - **Scope**: App Folder permission with `files.metadata.read`,
-  `files.content.read`, `files.content.write`, `account_info.read` — access is
-  confined to `/Apps/<App>/`.
+  `files.content.read`, `files.content.write` — access is confined to
+  `/Apps/<App>/`.
 - **Token storage**: refresh + access tokens in Obsidian SecretStorage (keyed per
   backend type); the access-token expiry lives in `settings.backendData`. Tokens
   refreshed mid-sync are written back after the cycle.
