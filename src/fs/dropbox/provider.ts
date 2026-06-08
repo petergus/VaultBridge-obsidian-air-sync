@@ -38,13 +38,6 @@ export interface DropboxBackendData {
 	pendingAuthState: string;
 	/** CSRF nonce for an in-flight web folder pick (Dropbox Chooser); cleared on completion. */
 	pendingFolderPickState: string;
-	/**
-	 * PREVIEW-ONLY: user-supplied Dropbox app key (public PKCE client id). Lets testers
-	 * connect with their own Dropbox app while Air Sync's official key isn't embedded
-	 * yet. Empty → fall back to the embedded `DROPBOX_CLIENT_ID`. Remove this (and the
-	 * settings field) once the real key is embedded at official release (see auth.ts).
-	 */
-	appKey: string;
 }
 
 const DEFAULT_DROPBOX_DATA: DropboxBackendData = {
@@ -53,7 +46,6 @@ const DEFAULT_DROPBOX_DATA: DropboxBackendData = {
 	pendingCodeVerifier: "",
 	pendingAuthState: "",
 	pendingFolderPickState: "",
-	appKey: "",
 };
 
 /**
@@ -99,7 +91,7 @@ export class DropboxProvider implements IBackendProvider {
 
 	/** Build a token-bearing client from the stored secrets + expiry. */
 	private makeClient(data: DropboxBackendData, logger?: Logger): DropboxClient {
-		return this.clientFromAuth(this.auth.getOrCreateAuth(data.appKey, logger), data, logger);
+		return this.clientFromAuth(this.auth.getOrCreateAuth(logger), data, logger);
 	}
 
 	/**
@@ -108,7 +100,7 @@ export class DropboxProvider implements IBackendProvider {
 	 * concurrently with a live sync and must not reset its in-memory tokens.
 	 */
 	private makeDetachedClient(data: DropboxBackendData, logger?: Logger): DropboxClient {
-		return this.clientFromAuth(this.auth.createDetachedAuth(data.appKey, logger), data, logger);
+		return this.clientFromAuth(this.auth.createDetachedAuth(logger), data, logger);
 	}
 
 	private clientFromAuth(auth: DropboxAuth, data: DropboxBackendData, logger?: Logger): DropboxClient {
@@ -220,21 +212,15 @@ export class DropboxProvider implements IBackendProvider {
 	 * selection returns via `obsidian://air-sync-folder` and is bound by
 	 * {@link completeWebFolderPick}. Returns the CSRF state to persist.
 	 */
-	startWebFolderPick(settings: AirSyncSettings): Promise<Record<string, unknown>> {
+	startWebFolderPick(_settings: AirSyncSettings): Promise<Record<string, unknown>> {
 		const state = randomState();
 		// The Chooser host page reads the (public, non-secret) app key from the URL
 		// rather than embedding it: the plugin is the single source of truth for the
 		// key, so the host page needs no build-time placeholder of its own. The real
 		// gate is the Chooser domain allowlist in the App Console, not key secrecy.
-		//
-		// PREVIEW: the picker must use the SAME key the user authed with, so the
-		// user-supplied key (DropboxBackendData.appKey) wins over the embedded
-		// placeholder — mirroring DropboxAuthProvider.effectiveClientId. Once the real
-		// key is embedded at GA, drop the override and pass DROPBOX_CLIENT_ID directly.
-		const appKey = this.getData(settings).appKey.trim() || DROPBOX_CLIENT_ID;
 		const url =
 			`${FOLDER_PICKER_URL}?state=${encodeURIComponent(state)}` +
-			`&appKey=${encodeURIComponent(appKey)}`;
+			`&appKey=${encodeURIComponent(DROPBOX_CLIENT_ID)}`;
 		if (Platform.isMobile) {
 			window.location.href = url;
 		} else {

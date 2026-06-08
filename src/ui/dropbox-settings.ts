@@ -1,5 +1,5 @@
 import type { App, TextComponent } from "obsidian";
-import { Notice, Setting } from "obsidian";
+import { Setting } from "obsidian";
 import type { AirSyncSettings } from "../settings";
 import type {
 	BackendConnectionActions,
@@ -31,24 +31,6 @@ export class DropboxSettingsRenderer implements IBackendSettingsRenderer {
 		const authed = provider?.auth.isAuthenticated(settings.backendData ?? {}) ?? false;
 		const data = (settings.backendData ?? {}) as Partial<DropboxBackendData>;
 
-		// PREVIEW-ONLY: Air Sync's official Dropbox app key isn't embedded yet, so testers
-		// supply their own app's key here. Disabled once connected (changing it would
-		// invalidate the live tokens). Remove this whole field at official release (see auth.ts).
-		new Setting(containerEl)
-			.setName("App key")
-			.setDesc(
-				"Your Dropbox app's key (app folder permission). Required while Dropbox support is in preview, until a built-in key ships.",
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Dropbox app key")
-					.setValue(data.appKey ?? "")
-					.setDisabled(authed)
-					.onChange(async (value) => {
-						await onSave({ appKey: value.trim() });
-					}),
-			);
-
 		const statusDesc = authed ? "● Connected" : "● Not connected";
 		const statusClass = authed ? "air-sync-status-connected" : "air-sync-status-disconnected";
 		const statusSetting = new Setting(containerEl)
@@ -62,14 +44,6 @@ export class DropboxSettingsRenderer implements IBackendSettingsRenderer {
 					if (authed) {
 						await actions.disconnect();
 					} else {
-						// PREVIEW: a key is required to connect; remove this guard with the field.
-						// Read it live — the App key onChange above replaces settings.backendData,
-						// so the `data` captured at render time is stale.
-						const appKey = ((settings.backendData ?? {}) as Partial<DropboxBackendData>).appKey ?? "";
-						if (!appKey.trim()) {
-							new Notice("Enter your Dropbox app key first");
-							return;
-						}
 						await actions.startAuth();
 					}
 					actions.refreshDisplay();

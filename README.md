@@ -18,7 +18,7 @@ Works on desktop and mobile, powered by your own cloud storage — **Google Driv
 
 > **Requires a Google or Dropbox account.**
 
-> **Dropbox is in Preview** — enter your own Dropbox **app key** in settings before connecting (Air Sync's own key isn't built in yet).
+> **Dropbox support is in Preview.**
 
 1. Open the plugin settings (**Settings → Air Sync**).
 2. Pick your backend (**Google Drive** or **Dropbox** (Preview)) if more than one is available.
