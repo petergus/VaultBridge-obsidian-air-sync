@@ -162,6 +162,17 @@ export class DropboxFs extends CachingRemoteFs<DropboxEntry> {
 			execute: () => this.client.move(this.addr(oldPath), this.addr(newPath)),
 			staleGuard: (r) => ({ path: oldPath, expectedId: r.expectedId }),
 			update: (r, result) => {
+				// The shared staleGuard only validates the SOURCE (oldPath still resolves to
+				// our id). A concurrent delta can land a DIFFERENT entry at newPath during the
+				// phase-2 move (run outside the mutex); setEntry would evict and overwrite it,
+				// dropping that change. Skip instead — symmetric with write()'s new-path guard
+				// and GoogleDriveFs.rename; the in-memory cursor advanced past the delta, so the
+				// next cycle re-detects our rename.
+				const occupant = this.cache.getFile(newPath);
+				if (occupant && occupant.id !== result.id) {
+					this.logger?.warn("Skipping stale cache update for rename", { path: newPath });
+					return;
+				}
 				this.cache.removeEntry(oldPath);
 				// move_v2's metadata may arrive without a `.tag` discriminator; stamp it
 				// from the known prior type so the cache keeps classifying a moved folder

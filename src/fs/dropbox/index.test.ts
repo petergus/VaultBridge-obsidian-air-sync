@@ -198,6 +198,31 @@ describe("DropboxFs stale-cache guards (concurrent delta)", () => {
 		expect(cache.getFile("x.md")?.id).toBe("id:delta");
 		expect(warn).toHaveBeenCalledWith("Skipping stale cache update for delete", { path: "x.md" });
 	});
+
+	it("rename: does not overwrite a concurrent entry that landed at newPath during the move", async () => {
+		const { fs, cache, warn } = await makeFsWithWarn();
+		cache.setEntry("old.md", dbxFile("src", "/root/old.md"));
+
+		(await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
+			const url = typeof opts === "string" ? opts : opts.url;
+			if (url.includes("move_v2")) {
+				// Phase 2 (move) runs outside the mutex — a concurrent delta lands a
+				// DIFFERENT entry at the destination before our phase-3 cache update.
+				cache.setEntry("new.md", dbxFile("delta", "/root/new.md"));
+				return Promise.resolve(mockRes({ metadata: untagged(dbxFile("src", "/root/new.md")) }));
+			}
+			return Promise.resolve(mockRes({}));
+		});
+
+		await fs.rename("old.md", "new.md");
+
+		// The concurrent entry survives and the source is left intact (the whole cache
+		// update is skipped); the move's in-memory cursor advanced, so the next cycle
+		// re-detects our rename rather than this overwriting the delta's change.
+		expect(cache.getFile("new.md")?.id).toBe("id:delta");
+		expect(cache.hasFile("old.md")).toBe(true);
+		expect(warn).toHaveBeenCalledWith("Skipping stale cache update for rename", { path: "new.md" });
+	});
 });
 
 describe("DropboxFs.rename", () => {
