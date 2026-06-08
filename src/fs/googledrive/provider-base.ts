@@ -14,6 +14,7 @@ import { MetadataStore } from "../../store/metadata-store";
 import { resolveGDriveRemoteVault } from "./remote-vault";
 import { resolveFolderPath } from "./folder-path";
 import { isHttpError } from "./incremental-sync";
+import { classifyDriveError } from "./errors";
 import { FOLDER_MIME } from "./types";
 import type { DriveFile } from "./types";
 import type { GoogleDriveBackendData } from "./provider";
@@ -289,6 +290,8 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		if (!data.remoteVaultFolderId) return null;
 		return `${this.type}:${data.remoteVaultFolderId}`;
 	}
+
+	classifyError(err: unknown) { return classifyDriveError(err); }
 
 	readBackendState(fs: IFileSystem): Record<string, unknown> {
 		if (!(fs instanceof GoogleDriveFs)) return {};

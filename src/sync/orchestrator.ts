@@ -13,8 +13,8 @@ import { planSync } from "./decision-engine";
 import { refinePlan } from "./rename-optimizer";
 import { executePlan } from "./plan-executor";
 import type { ExecutionContext, ExecutionResult } from "./plan-executor";
-import { AuthError } from "../fs/errors";
-import { getErrorInfo, isRateLimitError, sleep } from "./error";
+import { classifyHttpError } from "../fs/errors";
+import { decideRetry, sleep } from "./error";
 import type { SyncStatus } from "./types";
 import { buildSyncRecord } from "./state-committer";
 import { buildNotificationMessage } from "./sync-notification";
@@ -208,35 +208,29 @@ export class SyncOrchestrator {
 				};
 			} catch (err) {
 				lastError = err;
-				const { status, retryAfter } = getErrorInfo(err);
+				// Classification is the backend's job (it knows its own error shapes,
+				// e.g. that Google 403 can mean rate-limit); the retry POLICY is the
+				// engine's and stays backend-neutral. Fall back to the generic HTTP
+				// classifier for backends that don't override it.
+				const provider = this.deps.backendProvider();
+				const classification = provider?.classifyError?.(err) ?? classifyHttpError(err);
 				this.deps.logger?.error(
 					`Sync error (attempt ${attempt}/${MAX_RETRIES})`,
-					{ status, message: err instanceof Error ? err.message : String(err) },
+					{ kind: classification.kind, message: err instanceof Error ? err.message : String(err) },
 				);
 
-				if (err instanceof AuthError) {
+				const decision = decideRetry(classification, attempt, MAX_RETRIES, Math.random);
+				if (decision.action === "abort") {
 					this.deps.onStatusChange("error");
-					this.deps.notify("Authentication error. Please reconnect in settings.");
+					this.deps.notify(decision.kind === "auth"
+						? "Authentication error. Please reconnect in settings."
+						: `Permission denied. Please check your ${provider?.displayName ?? "the remote backend"} permissions.`);
 					return null;
 				}
-				if (status === 403 && !isRateLimitError(err)) {
-					this.deps.onStatusChange("error");
-					// Name the active backend via provider.displayName rather than
-					// hardcoding one backend's name into this agnostic layer.
-					this.deps.notify(`Permission denied. Please check your ${this.deps.backendProvider()?.displayName ?? "the remote backend"} permissions.`);
-					return null;
-				}
-				if (status === 404) break;
-				if (attempt === MAX_RETRIES) break;
-
-				let delay: number;
-				if ((status === 429 || status === 403) && retryAfter !== null) {
-					delay = retryAfter * 1000;
-				} else {
-					const base = Math.pow(2, attempt - 1) * 1000;
-					delay = base * (0.5 + Math.random());
-				}
-				await sleep(delay);
+				// "stop" (e.g. 404) and "exhausted" both fall through to the generic
+				// failure handler below; only "retry" waits and loops.
+				if (decision.action !== "retry") break;
+				await sleep(decision.delayMs);
 			}
 		}
 

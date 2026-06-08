@@ -4,6 +4,7 @@ import type { IAuthProvider } from "./auth";
 import type { AirSyncSettings } from "../settings";
 import type { Logger } from "../logging/logger";
 import type { RemoteVaultResolution } from "./remote-vault-contract";
+import type { ErrorClassification } from "./errors";
 
 /**
  * Abstraction for a remote storage backend.
@@ -29,6 +30,15 @@ export interface IBackendProvider {
 
 	/** Return a string uniquely identifying the current remote target (e.g. folder ID) */
 	getIdentity(settings: AirSyncSettings): string | null;
+
+	/**
+	 * Classify an error thrown by this backend's I/O into a backend-neutral kind the
+	 * retry policy can act on (auth / permission / rateLimit / notFound / transient).
+	 * Lets the sync engine decide retry-vs-abort without knowing any backend's error
+	 * shape (e.g. that Google returns 403 for BOTH permission-denied and rate-limits).
+	 * Optional: when omitted the engine falls back to {@link classifyHttpError}.
+	 */
+	classifyError?(err: unknown): ErrorClassification;
 
 	/**
 	 * Read updated internal state from the FS to persist in settings.backendData.

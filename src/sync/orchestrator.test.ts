@@ -13,9 +13,10 @@ import { AuthError } from "../fs/errors";
 
 // Make retry backoff instant: the retry tests assert behaviour (retry count,
 // status), not wall-clock timing, and real exponential backoff + jitter added
-// ~4s to the suite. `sleep` is the only export stubbed; error classification
-// (getErrorInfo / isRateLimitError) stays real. Mocking sleep — rather than
-// using fake timers — avoids interfering with fake-indexeddb's async scheduling.
+// ~4s to the suite. `sleep` is the only export stubbed; the retry policy
+// (decideRetry) and the error classifier (fs/errors classifyHttpError) stay real.
+// Mocking sleep — rather than fake timers — avoids interfering with
+// fake-indexeddb's async scheduling.
 vi.mock("./error", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./error")>();
 	return { ...actual, sleep: () => Promise.resolve() };
