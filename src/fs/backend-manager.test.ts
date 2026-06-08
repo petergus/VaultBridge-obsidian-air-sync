@@ -453,12 +453,18 @@ describe("BackendManager — resetAll on connect (start cold)", () => {
 		await mgr.initBackend(); // sets backendProvider + remoteFs = fakeFs
 		fakeProvider.auth.completeAuth = () => Promise.resolve({});
 		vi.mocked(deps.onIdentityChanged).mockClear();
+		vi.mocked(deps.onConnected).mockClear();
 		fakeResetCheckpoint.mockClear();
 
 		await mgr.completeBackendConnect("auth-code");
 
 		expect(deps.onIdentityChanged).toHaveBeenCalledTimes(1);
 		expect(fakeResetCheckpoint).toHaveBeenCalledTimes(1);
+		// The reset MUST run before the FS is rebuilt and handed to the orchestrator —
+		// otherwise it would wipe the freshly-built FS's checkpoint, not the prior binding's.
+		const resetOrder = vi.mocked(deps.onIdentityChanged).mock.invocationCallOrder[0]!;
+		const connectedOrder = vi.mocked(deps.onConnected).mock.invocationCallOrder[0]!;
+		expect(resetOrder).toBeLessThan(connectedOrder);
 	});
 });
 

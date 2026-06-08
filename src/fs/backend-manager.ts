@@ -268,11 +268,14 @@ export class BackendManager {
 			settings.backendData = { ...backendData, ...updates };
 			await this.deps.saveSettings();
 
-			// Start cold on connect: discard any baseline + checkpoint left over from a
-			// prior binding (a reconnect to a still-bound target — e.g. custom OAuth keeps
-			// its folder id — must not silently resume against stale state). Runs while the
-			// folder id (if any) still keys the store, before createFs builds the new FS.
+			// Start cold on connect: a reconnect to a still-bound target (e.g. custom OAuth
+			// keeps its folder id across disconnect) must not silently resume against stale
+			// state. resetAll runs while the folder id is still in settings (see its doc).
 			await this.resetAll(settings);
+
+			// Close any FS from a prior connection before rebuilding — resetAll may have
+			// used its open connection, so reassigning without closing would leak it.
+			this.closeRemoteFs();
 
 			// No remote-vault binding here: after auth the user picks the folder
 			// explicitly (default-folder button or the Picker). createFs returns null
@@ -321,7 +324,8 @@ export class BackendManager {
 	 *
 	 * Checkpoint clear prefers the LIVE FS (its single open connection is mutex-coordinated
 	 * with any in-flight cycle); with no live FS — e.g. an expired backend that never built
-	 * one — it clears by settings key instead. Best-effort.
+	 * one — it clears by settings key instead. The checkpoint clear is best-effort (logged,
+	 * not thrown); the baseline clear, in contrast, propagates so a failure is surfaced.
 	 */
 	private async resetAll(settings: AirSyncSettings): Promise<void> {
 		if (this.remoteFs) {
@@ -351,13 +355,11 @@ export class BackendManager {
 		// empty so collectChanges forces a COLD reconcile that ignores the stale cursor.)
 		this.connecting = true;
 		try {
-			// Discard this target's full sync state (checkpoint store + SyncRecord
-			// baseline) so nothing stale survives a reconnect. BEFORE disconnect() resets
-			// backendData (the folder id keys the store).
+			// Discard this target's sync state so nothing stale survives a reconnect —
+			// before disconnect() resets backendData (resetAll keys the store off it).
 			await this.resetAll(settings);
 
-			const resetData = await this.backendProvider.disconnect(settings);
-			settings.backendData = resetData;
+			settings.backendData = await this.backendProvider.disconnect(settings);
 			// Forget the synced identity so a later reconnect (to any target) starts clean.
 			settings.lastSyncedIdentity = "";
 			await this.deps.saveSettings();
@@ -415,9 +417,8 @@ export class BackendManager {
 				p.clearPluginSecrets?.();
 			}
 
-			// Discard the OLD target's full sync state (checkpoint store + baseline) so a
-			// switch leaves no orphan. BEFORE backendData is wiped below (the folder id
-			// keys the store).
+			// Discard the OLD target's sync state so a switch leaves no orphan — before
+			// backendData is wiped below (resetAll keys the store off the folder id).
 			await this.resetAll(settings);
 
 			// Hard-clear persisted params (including any custom OAuth references) and the
