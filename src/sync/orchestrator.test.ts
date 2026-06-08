@@ -822,11 +822,12 @@ describe("SyncOrchestrator", () => {
 			// The cursor now commits inside commitCheckpoint (atomically with the cache).
 			// A failed cycle must NOT call it — that is exactly how the cursor is held back.
 			const commitCheckpoint = vi.fn().mockResolvedValue(undefined);
+			remoteFs.commitCheckpoint = commitCheckpoint;
 			const deps = createDeps({
 				getSettings: () => settings,
 				localFs: () => localFs,
 				remoteFs: () => remoteFs,
-				backendProvider: () => mockProvider({ commitCheckpoint }),
+				backendProvider: () => mockProvider({}),
 			});
 			const orchestrator = new SyncOrchestrator(deps);
 
@@ -859,6 +860,7 @@ describe("SyncOrchestrator", () => {
 			remoteFs.hasCheckpoint = vi.fn().mockResolvedValue(true);
 
 			const commitCheckpoint = vi.fn().mockRejectedValue(new Error("IndexedDB write failed"));
+			remoteFs.commitCheckpoint = commitCheckpoint;
 			// readBackendState persists token state AFTER the checkpoint; a failed flush
 			// must abort before it runs, so the cursor (committed inside commitCheckpoint)
 			// is never advanced.
@@ -869,7 +871,6 @@ describe("SyncOrchestrator", () => {
 				remoteFs: () => remoteFs,
 				backendProvider: () =>
 					mockProvider({
-						commitCheckpoint,
 						readBackendState: readBackendState as unknown as import("../fs/backend").IBackendProvider["readBackendState"],
 					}),
 			});

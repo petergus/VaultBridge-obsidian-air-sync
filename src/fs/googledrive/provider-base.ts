@@ -293,15 +293,15 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 
 	classifyError(err: unknown) { return classifyDriveError(err); }
 
-	readBackendState(fs: IFileSystem): Record<string, unknown> {
-		if (!(fs instanceof GoogleDriveFs)) return {};
+	readBackendState(): Record<string, unknown> {
 		const result: Record<string, unknown> = {};
 
 		// The delta cursor is no longer persisted in settings — it commits atomically
-		// with the file map in the metadata store (ADR 0001). Here we only persist the
-		// non-secret token expiry; the tokens themselves go to SecretStorage. (Token
-		// state is saved on every cycle, clean or not: a refresh that already succeeded
-		// should not be discarded just because a later file op failed.)
+		// with the file map in the metadata store (ADR 0001, via the FS's
+		// commitCheckpoint). Here we only persist the non-secret token expiry; the
+		// tokens themselves go to SecretStorage. (Token state is saved on every cycle,
+		// clean or not: a refresh that already succeeded should not be discarded just
+		// because a later file op failed.)
 		const tokens = this.auth.getTokenState();
 		if (tokens && tokens.refreshToken) {
 			storeDriveTokens(this.secretStore, this.type, tokens);
@@ -309,16 +309,6 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		}
 
 		return result;
-	}
-
-	/**
-	 * Flush the metadata cache AND the delta cursor to IndexedDB after a clean cycle,
-	 * atomically in one transaction (ADR 0001) — so a crash can never leave the cache
-	 * ahead of (or behind) the cursor and drop a remote deletion the replay can't
-	 * re-detect. The cursor is no longer persisted via {@link readBackendState}.
-	 */
-	async commitCheckpoint(fs: IFileSystem): Promise<void> {
-		if (fs instanceof GoogleDriveFs) await fs.commitCheckpoint();
 	}
 
 	/**

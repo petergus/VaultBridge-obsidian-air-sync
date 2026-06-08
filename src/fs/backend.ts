@@ -47,21 +47,11 @@ export interface IBackendProvider {
 	 * contents. Tokens are stored in SecretStorage rather than returned in the record.
 	 *
 	 * The delta cursor is NOT persisted here — it is committed atomically with the
-	 * file-metadata cache in the backend's own store (see {@link commitCheckpoint}
+	 * file-metadata cache in the backend's own store (via `IFileSystem.commitCheckpoint`
 	 * and ADR 0001), so there is no separate settings write to gate on cycle success.
+	 * Reads provider/auth state only, so it takes no FS argument.
 	 */
-	readBackendState?(fs: IFileSystem): Record<string, unknown>;
-
-	/**
-	 * Flush the backend's durable checkpoint — the file-metadata cache AND the delta
-	 * cursor — to its store, atomically (one transaction; see ADR 0001). Called ONLY
-	 * after a fully-successful cycle (failed === 0). On a failed cycle this is NOT
-	 * called: the cache and cursor stay at the last committed state, so the next run's
-	 * replay re-detects the un-synced work (a remote deletion in particular, which a
-	 * replay against an already-absorbed cache would silently drop). Optional:
-	 * backends without such a cache omit it.
-	 */
-	commitCheckpoint?(fs: IFileSystem): Promise<void>;
+	readBackendState?(): Record<string, unknown>;
 
 	/**
 	 * Find or create this vault's default remote folder for the given vault name.

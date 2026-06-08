@@ -399,15 +399,17 @@ export class SyncOrchestrator {
 		// prior committed cursor and the next run re-detects the un-synced work.
 		const provider = this.deps.backendProvider();
 		const cleanCycle = result.failed.length === 0;
-		if (cleanCycle && provider?.commitCheckpoint && remoteFs) {
-			await provider.commitCheckpoint(remoteFs);
+		// The checkpoint lives on the FS now (no provider downcast): flush it only on a
+		// fully clean cycle so a partial sync keeps the prior committed cursor.
+		if (cleanCycle && remoteFs?.commitCheckpoint) {
+			await remoteFs.commitCheckpoint();
 		}
 		// readBackendState now persists only non-secret token state (the cursor lives
 		// in the backend store, committed above) — safe to run every cycle.
-		if (provider?.readBackendState && remoteFs) {
+		if (provider?.readBackendState) {
 			settings.backendData = {
 				...settings.backendData,
-				...provider.readBackendState(remoteFs),
+				...provider.readBackendState(),
 			};
 		}
 		await this.deps.saveSettings();

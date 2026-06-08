@@ -118,6 +118,16 @@ export interface IFileSystem {
 	resetCheckpoint?(): Promise<void>;
 
 	/**
+	 * Flush the committed checkpoint — the delta cursor AND any derived cache — to the
+	 * backend's own store, atomically (one transaction; see ADR 0001). Called by the
+	 * sync engine ONLY after a fully-successful cycle (failed === 0); a failed cycle
+	 * leaves cache+cursor at the last committed state so the next run re-detects the
+	 * un-synced work. Lives on the FS (not the provider) so the engine never has to
+	 * downcast. Optional: backends without an incremental checkpoint omit it.
+	 */
+	commitCheckpoint?(): Promise<void>;
+
+	/**
 	 * Release resources (e.g. close IndexedDB connections).
 	 * Called on plugin unload. Optional — not all backends need cleanup.
 	 */
