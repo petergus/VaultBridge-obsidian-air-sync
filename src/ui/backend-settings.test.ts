@@ -3,10 +3,11 @@ import { initRegistry, getAllBackendProviders } from "../fs/registry";
 import { getBackendSettingsRenderer } from "./backend-settings";
 import type { ISecretStore } from "../fs/secret-store";
 
-// A provider that lands in the registry with no matching settings renderer shows
-// an EMPTY settings panel — a silent UX drift that nothing else catches today.
-// This pins "every registered backend has a renderer" so adding a backend without
-// wiring its UI fails the gate. (Groundwork for B2 registry unification.)
+// A provider that lands in the registry with no settings renderer shows an EMPTY
+// settings panel — a silent UX drift. Since B2 the renderer is resolved straight
+// from the provider (provider.createSettingsRenderer), so this pins that every
+// registered backend actually implements it — adding a backend without wiring its
+// UI fails the gate.
 
 const mockSecretStore: ISecretStore = {
 	getSecret: () => null,

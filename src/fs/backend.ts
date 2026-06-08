@@ -5,6 +5,7 @@ import type { AirSyncSettings } from "../settings";
 import type { Logger } from "../logging/logger";
 import type { RemoteVaultResolution } from "./remote-vault-contract";
 import type { ErrorClassification } from "./errors";
+import type { IBackendSettingsRenderer } from "./settings-renderer";
 
 /**
  * Abstraction for a remote storage backend.
@@ -30,6 +31,13 @@ export interface IBackendProvider {
 
 	/** Return a string uniquely identifying the current remote target (e.g. folder ID) */
 	getIdentity(settings: AirSyncSettings): string | null;
+
+	/**
+	 * The backend's own settings-UI renderer. Declared here so the provider registry
+	 * is the single source of truth for "what backends exist" — the settings tab
+	 * resolves the renderer by type instead of the UI keeping a parallel list.
+	 */
+	createSettingsRenderer?(): IBackendSettingsRenderer;
 
 	/**
 	 * Classify an error thrown by this backend's I/O into a backend-neutral kind the

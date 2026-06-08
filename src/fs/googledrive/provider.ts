@@ -5,6 +5,8 @@ import type { Logger } from "../../logging/logger";
 import { GoogleAuth } from "./auth";
 import type { IGoogleAuth } from "./auth";
 import { GoogleDriveAuthProviderBase, GoogleDriveProviderBase } from "./provider-base";
+import type { IBackendSettingsRenderer } from "../settings-renderer";
+import { GoogleDriveSettingsRenderer } from "../../ui/googledrive-settings";
 
 /** Google Drive's slice of the active-backend `backendData` bag (tokens live in SecretStorage) */
 export interface GoogleDriveBackendData {
@@ -83,5 +85,9 @@ export class GoogleDriveProvider extends GoogleDriveProviderBase {
 
 	protected getDefaultData(): GoogleDriveBackendData {
 		return DEFAULT_GDRIVE_DATA;
+	}
+
+	createSettingsRenderer(): IBackendSettingsRenderer {
+		return new GoogleDriveSettingsRenderer();
 	}
 }
