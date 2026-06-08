@@ -81,6 +81,12 @@ beforeEach(() => {
 		getIdentity: () => "test:folder-A",
 		disconnect: vi.fn().mockResolvedValue({}),
 		clearPluginSecrets: vi.fn(),
+		// A full folder-pick capability (all-or-nothing — see WebFolderPicker). The
+		// "no folder picker" case deletes it; the rest override one half.
+		picker: {
+			startWebFolderPick: vi.fn().mockResolvedValue({}),
+			completeWebFolderPick: vi.fn().mockResolvedValue({ backendUpdates: {} }),
+		},
 	};
 	otherProvider = {
 		type: "other",
@@ -435,7 +441,7 @@ describe("BackendManager — web folder pick", () => {
 	it("startBackendFolderPick persists the provider's returned state", async () => {
 		const settings = mockSettings();
 		const startSpy = vi.fn().mockResolvedValue({ pendingFolderPickState: "S" });
-		fakeProvider.startWebFolderPick = startSpy;
+		fakeProvider.picker!.startWebFolderPick = startSpy;
 		const deps = createDeps(settings);
 		const mgr = new BackendManager(deps);
 		await mgr.initBackend();
@@ -448,7 +454,7 @@ describe("BackendManager — web folder pick", () => {
 
 	it("notifies when the backend has no folder picker", async () => {
 		const settings = mockSettings();
-		delete fakeProvider.startWebFolderPick;
+		delete fakeProvider.picker;
 		const deps = createDeps(settings);
 		const mgr = new BackendManager(deps);
 		await mgr.initBackend();
@@ -468,7 +474,7 @@ describe("BackendManager — web folder pick", () => {
 		const completeSpy = vi.fn().mockResolvedValue({
 			backendUpdates: { remoteVaultFolderId: "id:new", pendingFolderPickState: "" },
 		});
-		fakeProvider.completeWebFolderPick = completeSpy;
+		fakeProvider.picker!.completeWebFolderPick = completeSpy;
 		const deps = createDeps(settings);
 		const onConnected = deps.onConnected as ReturnType<typeof vi.fn>;
 		const refreshSettingsDisplay = deps.refreshSettingsDisplay as ReturnType<typeof vi.fn>;
@@ -499,7 +505,7 @@ describe("BackendManager — web folder pick", () => {
 		const blocker = new Promise<void>((r) => { release = r; });
 		const mgr = new BackendManager(createDeps(settings));
 		await mgr.initBackend();
-		fakeProvider.completeWebFolderPick = vi.fn().mockImplementation(async () => {
+		fakeProvider.picker!.completeWebFolderPick = vi.fn().mockImplementation(async () => {
 			connectingDuringBind = mgr.isConnecting();
 			await blocker;
 			return { backendUpdates: { remoteVaultFolderId: "id:new", pendingFolderPickState: "" } };
@@ -518,7 +524,7 @@ describe("BackendManager — web folder pick", () => {
 		let release!: () => void;
 		const blocker = new Promise<void>((r) => { release = r; });
 		const completeSpy = vi.fn();
-		fakeProvider.completeWebFolderPick = completeSpy;
+		fakeProvider.picker!.completeWebFolderPick = completeSpy;
 		const deps = createDeps(settings);
 		// Hold initBackend mid-flight on its first-time saveSettings so `connecting`
 		// stays true while we fire the folder pick.
@@ -536,7 +542,7 @@ describe("BackendManager — web folder pick", () => {
 
 	it("completeBackendFolderPick notifies and does not re-init on a rejected selection", async () => {
 		const settings = mockSettings();
-		fakeProvider.completeWebFolderPick = vi.fn().mockRejectedValue(new Error("inaccessible folder"));
+		fakeProvider.picker!.completeWebFolderPick = vi.fn().mockRejectedValue(new Error("inaccessible folder"));
 		const deps = createDeps(settings);
 		const notify = deps.notify as ReturnType<typeof vi.fn>;
 		const onConnected = deps.onConnected as ReturnType<typeof vi.fn>;

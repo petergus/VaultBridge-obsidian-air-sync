@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { Notice, Platform } from "obsidian";
-import type { IBackendProvider } from "../backend";
+import type { IBackendProvider, WebFolderPicker } from "../backend";
 import type { IAuthProvider } from "../auth";
 import type { ISecretStore } from "../secret-store";
 import type { IFileSystem } from "../interface";
@@ -327,6 +327,15 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		const client = this.makeClient(settings, logger);
 		const cachedFolderId = data.remoteVaultFolderId || undefined;
 		return resolveGDriveRemoteVault(client, vaultName, cachedFolderId, logger);
+	}
+
+	/**
+	 * Every Google Drive backend IS its own folder-pick capability — it implements both
+	 * halves directly. Exposing `this` (typed down to {@link WebFolderPicker}) lets
+	 * BackendManager treat the pair as one all-or-nothing capability (`provider.picker?.…`).
+	 */
+	get picker(): WebFolderPicker {
+		return this;
 	}
 
 	/**

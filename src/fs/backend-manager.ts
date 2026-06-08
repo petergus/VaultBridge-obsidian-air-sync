@@ -163,12 +163,12 @@ export class BackendManager {
 		const settings = this.deps.getSettings();
 		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
 		this.backendProvider = provider;
-		if (!provider?.startWebFolderPick) {
+		if (!provider?.picker) {
 			this.deps.notify("This backend has no folder picker.");
 			return;
 		}
 		try {
-			const updates = await provider.startWebFolderPick(settings);
+			const updates = await provider.picker.startWebFolderPick(settings);
 			// Re-read settings.backendData AFTER the await (a concurrent sync may have
 			// persisted an advanced delta cursor during startWebFolderPick's token fetch);
 			// a pre-await snapshot would clobber it. Matches completeBackendFolderPick.
@@ -193,7 +193,7 @@ export class BackendManager {
 		const settings = this.deps.getSettings();
 		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
 		this.backendProvider = provider;
-		if (!provider?.completeWebFolderPick) {
+		if (!provider?.picker) {
 			this.deps.notify("This backend has no folder picker.");
 			return;
 		}
@@ -202,7 +202,7 @@ export class BackendManager {
 		// old target mid-rebind (the orchestrator gates on isConnecting()).
 		this.connecting = true;
 		try {
-			const result = await provider.completeWebFolderPick(
+			const result = await provider.picker.completeWebFolderPick(
 				params, settings, this.deps.getLogger(),
 			);
 			settings.backendData = { ...settings.backendData, ...result.backendUpdates };
