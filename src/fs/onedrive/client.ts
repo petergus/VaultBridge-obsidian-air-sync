@@ -6,7 +6,7 @@ import type {
 	OneDriveDeltaResponse,
 	OneDriveChildrenResponse,
 } from "./types";
-import { assertOk, GraphApiError } from "./types";
+import { assertOk, GraphApiError, encodeRelPath } from "./types";
 import { uploadSession, SIMPLE_UPLOAD_MAX } from "./upload-session";
 
 const GRAPH_API = "https://graph.microsoft.com/v1.0";
@@ -35,11 +35,6 @@ function rateLimitDelayMs(res: RequestUrlResponse, attempt: number): number {
 	const retryAfter = header ? Number(header) : NaN;
 	const raw = Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter * 1000 : 500 * 2 ** attempt;
 	return Math.min(raw, MAX_RATE_LIMIT_DELAY_MS);
-}
-
-/** Percent-encode a vault-relative path for Graph's `:/path:` addressing (preserve `/`). */
-function encodeRelPath(relPath: string): string {
-	return relPath.split("/").map(encodeURIComponent).join("/");
 }
 
 /**

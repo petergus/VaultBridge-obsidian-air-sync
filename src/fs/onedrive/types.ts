@@ -160,6 +160,11 @@ export function parseGraphTime(value: string | undefined): number {
 	return Number.isNaN(ms) ? 0 : ms;
 }
 
+/** Percent-encode a vault-relative path for Graph's `:/path:` addressing (preserve `/`). */
+export function encodeRelPath(relPath: string): string {
+	return relPath.split("/").map(encodeURIComponent).join("/");
+}
+
 /** The mtime source for an item: fileSystemInfo first, then the item's own time. */
 export function itemMtime(item: OneDriveItem): number {
 	return parseGraphTime(item.fileSystemInfo?.lastModifiedDateTime ?? item.lastModifiedDateTime);

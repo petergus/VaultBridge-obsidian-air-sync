@@ -1,16 +1,12 @@
 import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
 import type { OneDriveItem } from "./types";
+import { encodeRelPath } from "./types";
 
 /** Files at/above this size use a resumable upload session; smaller use a simple PUT. */
 export const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
 
 /** Graph requires each non-final chunk to be a multiple of 320 KiB. */
 const CHUNK_SIZE = 10 * 320 * 1024; // 3.2 MiB — a multiple of 320 KiB, under the 4 MiB simple cap.
-
-/** Percent-encode a name segment for Graph's `:/path:` addressing. */
-function encodeName(name: string): string {
-	return name.split("/").map(encodeURIComponent).join("/");
-}
 
 interface SessionCtx {
 	request: (
@@ -45,7 +41,7 @@ export async function uploadSession(
 	lastModifiedDateTime: string,
 ): Promise<OneDriveItem> {
 	const createRes = await ctx.request("createUploadSession", {
-		url: `${ctx.graphApi}/me/drive/items/${parentId}:/${encodeName(name)}:/createUploadSession`,
+		url: `${ctx.graphApi}/me/drive/items/${parentId}:/${encodeRelPath(name)}:/createUploadSession`,
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({

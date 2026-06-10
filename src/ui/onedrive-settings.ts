@@ -81,6 +81,11 @@ export class OneDriveSettingsRenderer implements IBackendSettingsRenderer {
 						.setButtonText(defaultName)
 						.setCta()
 						.onClick(async () => {
+							// Clear any folder name queued by the modal first: the default
+							// button always binds the vault name. Otherwise a pick whose bind
+							// failed (bindDefaultFolder swallows errors) would leave a stale
+							// pendingPickedFolderPath that this button would silently reuse.
+							await onSave({ pendingPickedFolderPath: "" });
 							await actions.bindDefaultFolder();
 						}),
 				)
