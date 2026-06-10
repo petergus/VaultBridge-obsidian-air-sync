@@ -2,9 +2,9 @@
 
 Your Obsidian notes, always up to date on every device — without ever thinking about sync. Edit on your laptop, pick up your phone, and it's caught up before you start typing.
 
-Works on desktop and mobile, powered by your own cloud storage — **Google Drive**, or **Dropbox** (Preview).
+Works on desktop and mobile, powered by your own cloud storage — **Google Drive**, **Dropbox** (Preview), or **OneDrive** (Preview).
 
-> **Requires a Google or Dropbox account.**
+> **Requires a Google, Dropbox, or Microsoft account.**
 
 ## What you get
 
@@ -16,13 +16,13 @@ Works on desktop and mobile, powered by your own cloud storage — **Google Driv
 
 ## Getting started
 
-> **Requires a Google or Dropbox account.**
+> **Requires a Google, Dropbox, or Microsoft account.**
 
-> **Dropbox support is in Preview.**
+> **Dropbox and OneDrive support are in Preview.** OneDrive supports personal Microsoft accounts only.
 
 1. Open the plugin settings (**Settings → Air Sync**).
-2. Pick your backend (**Google Drive** or **Dropbox** (Preview)) if more than one is available.
-3. Click **Connect to …** (e.g. **Connect to Google Drive** or **Connect to Dropbox**), then approve access in your browser.
+2. Pick your backend (**Google Drive**, **Dropbox** (Preview), or **OneDrive** (Preview)) if more than one is available.
+3. Click **Connect to …** (e.g. **Connect to Google Drive**, **Connect to Dropbox**, or **Connect to OneDrive**), then approve access in your browser.
 4. Choose where to sync: use the **default folder** (named after your vault), or **pick an existing folder**.
 
 That's it — Air Sync syncs into that folder from then on.
@@ -95,10 +95,11 @@ Air Sync connects only to the cloud storage you choose, to sync your files:
 
 - **Google Drive** — `googleapis.com` for sync; sign-in happens on `accounts.google.com`, and a small auth server (`auth-airsync.takezo.dev`) performs the sign-in token exchange.
 - **Dropbox** — `api.dropboxapi.com` / `content.dropboxapi.com` for sync; sign-in and the folder picker run on `dropbox.com`, reached through helper pages on `airsync.takezo.dev` that redirect the sign-in result back to Obsidian and host the folder picker.
+- **OneDrive** — `graph.microsoft.com` for sync; sign-in happens on `login.microsoftonline.com` and returns directly to Obsidian (no relay or picker page — the folder is chosen in-app). Personal Microsoft accounts only.
 
 Your vault data is sent only to your chosen storage provider — never to the auth, redirect, or picker pages.
 
-Air Sync only ever sees the folders it created — never the rest of your Google Drive or Dropbox.
+Air Sync only ever sees the folders it created — never the rest of your Google Drive, Dropbox, or OneDrive. (On OneDrive it uses the App Folder, so it can only access its own folder.)
 
 ## Disclaimer
 
