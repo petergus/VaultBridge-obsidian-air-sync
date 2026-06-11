@@ -30,6 +30,17 @@ export interface OneDriveItem {
 	deleted?: { state?: string };
 }
 
+/**
+ * A driveItem GET that also carries `@microsoft.graph.downloadUrl` — a short-lived,
+ * pre-authenticated content URL Graph returns by default for file items. Downloads
+ * fetch this and GET it WITHOUT a bearer (see {@link OneDriveClient.download}), which
+ * sidesteps the `/content` 302 redirect that would otherwise forward a stale
+ * `Authorization` header to the CDN host and 401.
+ */
+export interface OneDriveItemWithDownloadUrl extends OneDriveItem {
+	"@microsoft.graph.downloadUrl"?: string;
+}
+
 /** A page of a `/delta` enumeration. */
 export interface OneDriveDeltaResponse {
 	value: OneDriveItem[];

@@ -76,13 +76,32 @@ describe("OneDriveClient.fetchDelta", () => {
 });
 
 describe("OneDriveClient.download", () => {
-	it("GETs the item content endpoint and returns the body bytes (302 followed by requestUrl)", async () => {
+	it("reads @microsoft.graph.downloadUrl, then GETs it WITHOUT a bearer (avoids the /content 302 401)", async () => {
+		const DOWNLOAD_URL = "https://cdn.example.com/blob?sig=presigned";
 		const buf = new TextEncoder().encode("data").buffer as ArrayBuffer;
-		const spy = (await spyRequestUrl()).mockResolvedValue(mockRes(undefined, { arrayBuffer: buf }));
+		const spy = (await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
+			const o = typeof opts === "string" ? { url: opts } : opts;
+			if (o.url === DOWNLOAD_URL) return Promise.resolve(mockRes(undefined, { arrayBuffer: buf }));
+			return Promise.resolve(mockRes({ id: "f1", "@microsoft.graph.downloadUrl": DOWNLOAD_URL }));
+		});
 		const client = await makeClient();
 		const out = await client.download("f1");
 		expect(new TextDecoder().decode(out)).toBe("data");
-		expect(String((spy.mock.calls[0]![0] as RequestUrlParam).url)).toContain("/me/drive/items/f1/content");
+
+		const metaCall = spy.mock.calls[0]![0] as RequestUrlParam;
+		expect(String(metaCall.url)).toContain("/me/drive/items/f1?select=id,@microsoft.graph.downloadUrl");
+		expect((metaCall.headers ?? {})["Authorization"]).toBe("Bearer tok"); // metadata GET IS authed
+
+		const blobCall = spy.mock.calls[1]![0] as RequestUrlParam;
+		expect(String(blobCall.url)).toBe(DOWNLOAD_URL);
+		// The pre-authenticated URL must NOT carry a graph bearer, else the CDN host 401s.
+		expect((blobCall.headers ?? {})["Authorization"]).toBeUndefined();
+	});
+
+	it("throws when the item carries no @microsoft.graph.downloadUrl", async () => {
+		(await spyRequestUrl()).mockResolvedValue(mockRes({ id: "f1" }));
+		const client = await makeClient();
+		await expect(client.download("f1")).rejects.toThrow(/no @microsoft.graph.downloadUrl/);
 	});
 });
 

@@ -3,6 +3,7 @@ import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
 import type { Logger } from "../../logging/logger";
 import type {
 	OneDriveItem,
+	OneDriveItemWithDownloadUrl,
 	OneDriveDeltaResponse,
 	OneDriveChildrenResponse,
 } from "./types";
@@ -197,9 +198,30 @@ export class OneDriveClient {
 		return this.json<OneDriveItem>("getAppRoot", `${GRAPH_API}/me/drive/special/approot`, "GET");
 	}
 
-	/** Download file content by id (requestUrl follows the 302 to the download URL). */
+	/**
+	 * Download file content by id in two steps to avoid the `/content` redirect:
+	 *  1. GET the item's `@microsoft.graph.downloadUrl` (a short-lived, pre-authenticated URL).
+	 *  2. GET that URL with NO bearer (`skipAuth`) — it carries its own auth in the query.
+	 *
+	 * Why not GET `/content` directly: Graph answers it with a 302 to a CDN/SharePoint
+	 * host, and Obsidian's `requestUrl` follows the redirect while re-sending
+	 * `Authorization: Bearer <graph-token>`. That host rejects the foreign bearer with
+	 * 401 (observed live), so the download must never carry it.
+	 */
 	async download(id: string): Promise<ArrayBuffer> {
-		const res = await this.request("download", { url: `${GRAPH_API}/me/drive/items/${id}/content`, method: "GET" });
+		const item = await this.json<OneDriveItemWithDownloadUrl>(
+			"download",
+			`${GRAPH_API}/me/drive/items/${id}?select=id,@microsoft.graph.downloadUrl`,
+			"GET",
+		);
+		const url = item["@microsoft.graph.downloadUrl"];
+		if (!url) throw new Error(`OneDrive API download failed: item ${id} has no @microsoft.graph.downloadUrl`);
+		const res = await this.request(
+			"download",
+			{ url, method: "GET" },
+			{ auth401Retried: false, rateLimitRetries: 0 },
+			true, // skipAuth: the pre-authenticated URL must not receive a graph bearer
+		);
 		return res.arrayBuffer;
 	}
 
