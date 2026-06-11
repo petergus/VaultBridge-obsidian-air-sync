@@ -45,13 +45,11 @@ export function decodeContent(buf: ArrayBuffer): ArrayBuffer {
 	const format = bytes[0];
 	const body = bytes.subarray(1);
 	if (format === FORMAT_DEFLATE) {
-		// Copy the inflated bytes into a standalone Uint8Array so the returned
-		// ArrayBuffer is exactly sized and owned by us (not a view tied to
-		// fflate's internal allocation).
-		const inflated = inflateSync(body);
-		const out = new Uint8Array(inflated.length);
-		out.set(inflated);
-		return out.buffer;
+		// fflate returns a fresh, offset-0, exactly-sized Uint8Array, so its
+		// `.buffer` is safe to hand back directly (zero-copy). The cast only
+		// re-narrows ArrayBufferLike → ArrayBuffer, lost when ByteCodec pins the
+		// return to a plain Uint8Array.
+		return inflateSync(body).buffer as ArrayBuffer;
 	}
 	if (format === FORMAT_RAW) {
 		// .slice() copies the subarray into a standalone buffer so the returned
