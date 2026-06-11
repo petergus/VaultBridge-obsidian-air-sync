@@ -54,11 +54,19 @@ export async function realRequestUrl(
 	const arrayBuffer = await res.arrayBuffer();
 	const text = new TextDecoder().decode(arrayBuffer);
 	let parsed: unknown;
-	let parsedOk = false;
+	let parsedDone = false;
 	const getJson = (): unknown => {
-		if (!parsedOk) {
-			parsed = text ? JSON.parse(text) : undefined;
-			parsedOk = true;
+		if (!parsedDone) {
+			// Match Obsidian: `.json` yields the parsed body, or undefined for a
+			// non-JSON body — it must NOT throw on access. DriveClient.request copies
+			// `json` off a thrown error (`wrapped[key] = src[key]`); a getter that
+			// threw there would mask the real HTTP error with a SyntaxError.
+			try {
+				parsed = text ? JSON.parse(text) : undefined;
+			} catch {
+				parsed = undefined;
+			}
+			parsedDone = true; // memoize even on failure, so we parse at most once
 		}
 		return parsed;
 	};

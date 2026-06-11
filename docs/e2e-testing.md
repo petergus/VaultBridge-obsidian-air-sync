@@ -85,10 +85,13 @@ npm run test:e2e
 
 ## Notes
 
-- **Dropbox mtime precision.** Dropbox truncates `client_modified` to whole seconds, so the
-  Dropbox suite runs the contract with `mtimePrecisionMs: 1000` (Drive keeps the default `1`).
-  This is the documented divergence from ADR 0002, exercised end-to-end without weakening the
-  unit contract.
+- **Dropbox mtime.** `DropboxFs` reports `server_modified` (the upload wall-clock) as `mtime`,
+  so a written mtime does not round-trip — the fake echoes it back, the live backend does not.
+  The Dropbox suite therefore runs the contract with `preservesWrittenMtime: false` (Drive
+  keeps the default `true`), relaxing only the mtime-equality checks to "a plausible
+  timestamp." mtime is not Dropbox's change-detection signal (that is the content-hash
+  `remoteChecksum`), so nothing load-bearing is dropped. This is the documented divergence
+  from ADR 0002, surfaced by this e2e.
 - **Leftover folders.** Cleanup runs in `afterAll`; if a run is killed mid-way, delete any
   stray `airsync-e2e-*` folder from the test account by hand.
 - **Why it is not in CI.** Real network, credentials, and quota make it unsuitable as a gate;

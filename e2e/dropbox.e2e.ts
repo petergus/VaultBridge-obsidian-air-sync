@@ -33,7 +33,15 @@ if (!creds) {
 	// forces a refresh on the first getAccessToken().
 	const auth = new DropboxAuth(DROPBOX_CLIENT_ID);
 	auth.setTokens(creds.refreshToken, "", 0);
-	const client = new DropboxClient((force) => auth.getAccessToken(force));
+	// Inject a node-safe sleep: the client's default sleep uses window.setTimeout,
+	// which is undefined under vitest's node environment — a 429 backoff (the very
+	// reason this suite runs fileParallelism:false) would otherwise crash with
+	// "window is not defined" instead of retrying.
+	const client = new DropboxClient(
+		(force) => auth.getAccessToken(force),
+		undefined,
+		(ms) => new Promise((r) => setTimeout(r, ms)),
+	);
 	let parentId = "";
 
 	beforeAll(async () => {
@@ -46,8 +54,9 @@ if (!creds) {
 	runIFileSystemContract(
 		"DropboxFs (real)",
 		async () => new DropboxFs(client, await makeDropboxChild(client, parentId)),
-		// Dropbox truncates client_modified to whole seconds → relax mtime equality
-		// to second precision (ADR 0002 documented divergence; ADR 0003 knob).
-		{ computesHashOnStat: false, mtimePrecisionMs: 1000 },
+		// DropboxFs reports server_modified (the upload wall-clock) as mtime, so a
+		// written mtime does not round-trip (unlike the fake, which echoes it back).
+		// Verified by this e2e; see ADR 0003 / dropbox/types.ts.
+		{ computesHashOnStat: false, preservesWrittenMtime: false },
 	);
 }

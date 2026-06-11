@@ -56,6 +56,6 @@ if (!creds) {
 		// A fresh empty child folder per test → satisfies the contract's
 		// empty-start assumption. Runs in beforeEach, after the beforeAll above.
 		async () => new GoogleDriveFs(client, await makeDriveChild(client, parentId)),
-		{ computesHashOnStat: false }, // Drive round-trips full-ms mtime → default precision
+		{ computesHashOnStat: false }, // Drive round-trips full-ms mtime → default preservesWrittenMtime: true
 	);
 }

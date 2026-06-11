@@ -8,11 +8,17 @@ import { resolve } from "node:path";
  */
 export function loadDotEnvE2e(): void {
 	try {
-		const txt = readFileSync(resolve(__dirname, "../../.env.e2e"), "utf8");
+		// Resolve from the working dir (vitest runs from the repo root). Avoids
+		// __dirname, which is undefined under ESM and would be swallowed by the
+		// catch below — silently skipping every backend even with valid tokens.
+		const txt = readFileSync(resolve(process.cwd(), ".env.e2e"), "utf8");
 		for (const line of txt.split("\n")) {
-			const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
-			if (m && m[1] && !process.env[m[1]]) {
-				process.env[m[1]] = m[2]!.replace(/^['"]|['"]$/g, "");
+			const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+			// `in`, not falsy: an intentionally-empty real env var must not be
+			// clobbered. `.trim()` drops a trailing CR (CRLF files) / stray spaces
+			// that would otherwise corrupt the token.
+			if (m && m[1] && !(m[1] in process.env)) {
+				process.env[m[1]] = m[2]!.trim().replace(/^['"]|['"]$/g, "");
 			}
 		}
 	} catch {

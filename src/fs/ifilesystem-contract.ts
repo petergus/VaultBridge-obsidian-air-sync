@@ -41,15 +41,21 @@ export interface IFileSystemContractOpts {
 	 */
 	computesHashOnStat?: boolean;
 	/**
-	 * Granularity (ms) at which the backend preserves a written `mtime`. The
-	 * second sanctioned backend-class knob (alongside `computesHashOnStat`): it
-	 * relaxes ONLY the mtime-equality assertions to compare at this precision.
-	 * Local/Drive round-trip full milliseconds → 1 (default); the real Dropbox
-	 * truncates `client_modified` to whole seconds → 1000. Used by the opt-in
-	 * real-cloud e2e (ADR 0003); the in-memory fakes keep the default since they
-	 * return full-ms timestamps (ADR 0002, "Documented intentional divergences").
+	 * Whether a written `mtime` round-trips through this backend. The second
+	 * sanctioned backend-class knob (alongside `computesHashOnStat`): when false,
+	 * the mtime-equality assertions only require a plausible (finite, positive)
+	 * timestamp instead of the exact written value.
+	 *
+	 * Default true: mock/LocalFs and Google Drive preserve the value. The real
+	 * Dropbox does NOT — `DropboxFs` reports `server_modified` (the upload
+	 * wall-clock, the canonical remote timestamp; see `dropbox/types.ts`), so the
+	 * value the engine sees is the server's, not the one written. The in-memory
+	 * Dropbox fake sets `server_modified` to the written mtime so the round-trip
+	 * is deterministically checkable at the unit level (ADR 0002, "Documented
+	 * intentional divergences"); the opt-in real-cloud e2e (ADR 0003) sets this
+	 * false to match the live backend.
 	 */
-	mtimePrecisionMs?: number;
+	preservesWrittenMtime?: boolean;
 }
 
 /**
@@ -62,9 +68,9 @@ export interface IFileSystemContractCtx {
 	/** Whether `stat()` returns a non-empty content hash for files. */
 	computesHashOnStat: boolean;
 	/**
-	 * Assert an observed `mtime` equals the expected value at the backend's
-	 * precision (see {@link IFileSystemContractOpts.mtimePrecisionMs}) — floors
-	 * both sides so a second-truncating backend still passes a sub-second seed.
+	 * Assert an observed `mtime` matches a written value. Exact when the backend
+	 * preserves written mtime; otherwise only requires a plausible (finite,
+	 * positive) timestamp (see {@link IFileSystemContractOpts.preservesWrittenMtime}).
 	 */
 	expectMtime: (actual: number, expected: number) => void;
 	/** Seed a file through the public `write()` — every backend's real entry point. */
@@ -97,14 +103,18 @@ export function runIFileSystemContract(
 			current = await makeFs();
 		});
 
-		const mtimePrecisionMs = opts.mtimePrecisionMs ?? 1;
+		const preservesWrittenMtime = opts.preservesWrittenMtime ?? true;
 		const ctx: IFileSystemContractCtx = {
 			fs: () => current,
 			computesHashOnStat: opts.computesHashOnStat ?? true,
 			expectMtime: (actual, expected) => {
-				const floor = (ms: number) =>
-					Math.floor(ms / mtimePrecisionMs) * mtimePrecisionMs;
-				expect(floor(actual)).toBe(floor(expected));
+				if (preservesWrittenMtime) {
+					expect(actual).toBe(expected);
+				} else {
+					// Backend assigns its own timestamp (e.g. Dropbox server_modified):
+					// the written value cannot round-trip, so require only a plausible one.
+					expect(Number.isFinite(actual) && actual > 0).toBe(true);
+				}
 			},
 			seed: async (path, text, mtime = 1000) => {
 				await current.write(path, bytes(text), mtime);

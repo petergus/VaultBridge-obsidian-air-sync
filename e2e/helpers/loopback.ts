@@ -24,8 +24,13 @@ export interface LoopbackCapture {
 	close: () => void;
 }
 
-/** Start the loopback server on `/callback` and return handles to drive the flow. */
-export function startLoopback(port: number): LoopbackCapture {
+/**
+ * Start the loopback server on `/callback`. Resolves once the server is actually
+ * listening (so a bind failure like EADDRINUSE rejects HERE, where the caller
+ * awaits it, instead of surfacing as an unhandled rejection while the user is
+ * told to open a URL for a server that never came up).
+ */
+export function startLoopback(port: number): Promise<LoopbackCapture> {
 	let resolveParams: (params: Record<string, string>) => void;
 	let rejectParams: (err: Error) => void;
 	const captured = new Promise<Record<string, string>>((res, rej) => {
@@ -41,28 +46,32 @@ export function startLoopback(port: number): LoopbackCapture {
 			return;
 		}
 		const params = Object.fromEntries(url.searchParams.entries());
+		const ok = params.code; // we only ever run the authorization-code flow
 		response.statusCode = 200;
 		response.setHeader("Content-Type", "text/html; charset=utf-8");
-		const ok = params.code || params.access_token;
 		response.end(
 			`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif">` +
 				(ok
 					? `<h2>✓ Authorized</h2><p>You can close this tab and return to the terminal.</p>`
-					: `<h2>⚠ No code in callback</h2><pre>${JSON.stringify(params)}</pre>`) +
+					: `<h2>⚠ No authorization code in callback</h2><pre>${JSON.stringify(params)}</pre>`) +
 				`</body>`,
 		);
 		if (ok) resolveParams(params);
-		else rejectParams(new Error(`Callback had no code/token: ${JSON.stringify(params)}`));
+		else rejectParams(new Error(`Callback had no code: ${JSON.stringify(params)}`));
 	});
 
-	server.on("error", (err) => rejectParams(err));
-	server.listen(port);
-
-	return {
-		redirectUri: `http://localhost:${port}/callback`,
-		waitForCallback: () => captured,
-		close: () => server.close(),
-	};
+	return new Promise<LoopbackCapture>((resolveStart, rejectStart) => {
+		server.once("error", rejectStart); // bind failure (EADDRINUSE) → reject the start
+		server.listen(port, () => {
+			server.off("error", rejectStart);
+			server.on("error", (err) => rejectParams(err)); // later errors fail the wait
+			resolveStart({
+				redirectUri: `http://localhost:${port}/callback`,
+				waitForCallback: () => captured,
+				close: () => server.close(),
+			});
+		});
+	});
 }
 
 /**
@@ -70,7 +79,10 @@ export function startLoopback(port: number): LoopbackCapture {
  * needed — so a captured refresh token lands where `test:e2e` reads it.
  */
 export function writeEnvE2e(key: string, value: string): string {
-	const path = resolve(import.meta.dirname, "../../.env.e2e");
+	// Resolve from the working dir (npm/vitest run from the repo root) — NOT from
+	// import.meta.dirname, which points at the bundle location (e2e/) once esbuild
+	// inlines this helper, breaking a dirname-relative path.
+	const path = resolve(process.cwd(), ".env.e2e");
 	let lines: string[] = [];
 	try {
 		lines = readFileSync(path, "utf8").split("\n");

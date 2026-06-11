@@ -63,12 +63,18 @@ is **opt-in**.
    `makeFs()` but exposes no cleanup hook, the harness creates one throwaway parent folder per
    run and a fresh child folder per test, deleting the parent recursively in `afterAll`.
 
-7. **A sanctioned `mtimePrecisionMs` knob absorbs the one documented timestamp divergence.** The
-   contract pins exact mtime round-trips, but the real Dropbox truncates `client_modified` to
-   whole seconds (ADR 0002, "Documented intentional divergences"). Rather than weaken the
-   contract, a second backend-class knob — alongside `computesHashOnStat` — relaxes **only** the
-   mtime-equality assertions to compare at the backend's precision (Drive `1`, Dropbox `1000`).
-   It changes nothing for the fakes (default `1`).
+7. **A sanctioned `preservesWrittenMtime` knob models the one timestamp divergence.** The
+   contract pins exact mtime round-trips, but the real `DropboxFs` reports `server_modified`
+   (the upload wall-clock, the canonical remote timestamp) as `mtime`, so a written value does
+   not round-trip at all — whereas the Dropbox fake echoes the written value back (ADR 0002,
+   "Documented intentional divergences"). Rather than weaken the contract, a second
+   backend-class knob — alongside `computesHashOnStat` — drops the mtime-equality assertions to
+   "a plausible (finite, positive) timestamp" when set `false` (the real Dropbox); mock/
+   LocalFs/Drive and all fakes keep the default `true`. This knob *replaced* an initial
+   `mtimePrecisionMs` guess (that Dropbox merely truncated the written mtime to seconds) — the
+   e2e proved the real value is the server's clock, not the written one rounded, so a
+   precision relaxation could never have matched. mtime is not Dropbox's change-detection
+   signal (that is the content-hash `remoteChecksum`), so nothing load-bearing is relaxed.
 
 ## Consequences
 
@@ -81,10 +87,11 @@ is **opt-in**.
 - **It is deliberately not a CI gate.** Credentials, quota, network flake, and runtime make it
   unsuitable for every push; it backstops, it does not replace, the fast fake-based contracts.
 
-- **`mtimePrecisionMs` is the second sanctioned backend-class knob** (after `computesHashOnStat`).
+- **`preservesWrittenMtime` is the second sanctioned backend-class knob** (after `computesHashOnStat`).
   Like that one, it encodes an intrinsic interface-level difference, not an opt-out of a behaviour
-  — it relaxes precision, never the assertion's intent, and only at non-default values.
+  — it drops only the mtime *value* check (never the assertion's intent), and only at the
+  non-default `false`.
 
 - **Adding a new backend extends the e2e in one block**, mirroring its fake-based contract call:
   authenticate a real client, create/clean an isolated folder, run `runIFileSystemContract` with
-  the right `computesHashOnStat`/`mtimePrecisionMs`.
+  the right `computesHashOnStat`/`preservesWrittenMtime`.

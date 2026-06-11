@@ -97,20 +97,25 @@ chore bolted on afterward.
 
 ## Consequences
 
-**Documented intentional divergences.** The CRUD fakes return **full-millisecond**
-timestamps so a written `mtime` round-trips exactly, even though the real
-`DropboxClient`/`PCloudClient` truncate the upload time to **seconds**. This is on
-purpose and consistent across the Drive/Dropbox/pCloud fakes: the IFileSystem contract
-tests **FS-layer fidelity** (the FS does not mangle the time the backend reports), not the
-backend's wire-format timestamp precision — that truncation lives in the client, outside
-this contract's scope. A divergence like this is allowed only when it is written down at
-the fake and does not weaken what the contract is *for*. The opt-in real-cloud e2e
+**Documented intentional divergences.** The Dropbox CRUD fake sets `server_modified` to
+the **written `mtime`** so a write round-trips exactly, even though the real `DropboxFs`
+reports `server_modified` — the **upload wall-clock**, the canonical remote timestamp (see
+`dropbox/types.ts`) — which is unrelated to the value written. (Drive genuinely does
+preserve the written `modifiedTime` at full ms.) This is on purpose: the IFileSystem
+contract tests **FS-layer fidelity** (the FS does not mangle the time the backend reports),
+and the fake supplies a deterministic, checkable timestamp for that. A divergence like this
+is allowed only when it is written down at the fake and does not weaken what the contract is
+*for*. The opt-in real-cloud e2e
 ([ADR 0003](0003-opt-in-e2e-validates-fakes-against-real-backends.md)) runs this same
-contract against the live backends, where the truncation is real; the
-`mtimePrecisionMs` opt — a second sanctioned backend-class knob alongside
-`computesHashOnStat` — relaxes **only** the mtime-equality assertions to the backend's
-precision (Drive `1`, Dropbox `1000`) so the divergence is exercised end-to-end without
-weakening the unit-level contract (the fakes keep the default full-ms precision).
+contract against the live backends, where `server_modified` is the real upload time; the
+`preservesWrittenMtime` opt — a second sanctioned backend-class knob alongside
+`computesHashOnStat` — drops the mtime-equality assertions to "a plausible (finite,
+positive) timestamp" for the real Dropbox (`false`), while mock/LocalFs/Drive and all the
+fakes keep the default (`true`). This empirically surfaced the fake's generosity: an earlier
+`mtimePrecisionMs` knob (assuming Dropbox merely *truncated* the written mtime to seconds)
+was wrong — the real value is the server's clock, not the written one rounded — and the e2e
+caught it. mtime is **not** Dropbox's change-detection signal anyway; that is the
+content-hash `remoteChecksum` (the change-detection contract is `checksumBased`).
 
 **The orchestrator-level convergence path is deliberately out of the FS contracts.** ADR
 0001 **path 2** (state C — a live FS whose in-memory cursor overtook the committed one
