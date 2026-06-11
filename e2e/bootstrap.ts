@@ -6,6 +6,7 @@ import {
 	DropboxAuth,
 } from "../src/fs/dropbox/auth";
 import { buildOAuthState, computeS256Challenge, generateRandomString } from "../src/fs/oauth-pkce";
+import { loadDotEnvE2e } from "./helpers/env";
 import { loopbackPort, startLoopback, writeEnvE2e } from "./helpers/loopback";
 
 /**
@@ -77,6 +78,7 @@ async function bootstrapDropbox(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+	loadDotEnvE2e(); // pick up AIRSYNC_E2E_GOOGLE_CLIENT_ID/_SECRET from .env.e2e
 	const which = process.argv[2];
 	if (which === "google") await bootstrapGoogle();
 	else if (which === "dropbox") await bootstrapDropbox();
