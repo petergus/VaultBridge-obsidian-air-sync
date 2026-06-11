@@ -1,4 +1,14 @@
-import { deflateSync, inflateSync } from "fflate";
+import { deflateSync as rawDeflateSync, inflateSync as rawInflateSync } from "fflate";
+
+// fflate 0.8.x declares these as returning `Uint8Array<ArrayBuffer>` (the
+// generic Uint8Array form). The community submission bot lints on a toolchain
+// where that generic does not resolve, so the return type degrades to `any`
+// and the typed-lint rules flag every downstream use. Pin the signatures to a
+// plain, always-resolvable `Uint8Array` so the codec stays type-safe in every
+// environment; the cast through `unknown` launders the unresolved type.
+type ByteCodec = (data: Uint8Array) => Uint8Array;
+const deflateSync = rawDeflateSync as unknown as ByteCodec;
+const inflateSync = rawInflateSync as unknown as ByteCodec;
 
 /**
  * Codec for base (3-way merge) content stored in IndexedDB.
@@ -35,8 +45,13 @@ export function decodeContent(buf: ArrayBuffer): ArrayBuffer {
 	const format = bytes[0];
 	const body = bytes.subarray(1);
 	if (format === FORMAT_DEFLATE) {
-		// inflateSync returns a fresh Uint8Array; .buffer has the exact byteLength.
-		return inflateSync(body).buffer;
+		// Copy the inflated bytes into a standalone Uint8Array so the returned
+		// ArrayBuffer is exactly sized and owned by us (not a view tied to
+		// fflate's internal allocation).
+		const inflated = inflateSync(body);
+		const out = new Uint8Array(inflated.length);
+		out.set(inflated);
+		return out.buffer;
 	}
 	if (format === FORMAT_RAW) {
 		// .slice() copies the subarray into a standalone buffer so the returned
