@@ -10,8 +10,13 @@ import { assertDropboxTokenResponse } from "./types";
 const AUTHORIZE_URL = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
 const REVOKE_URL = "https://api.dropboxapi.com/2/auth/token/revoke";
-/** Existing no-secret client-side relay (airsync.takezo.dev/callback → obsidian://). */
-const REDIRECT_URI = "https://airsync.takezo.dev/callback";
+/**
+ * Direct deep link back to the in-plugin protocol handler — no relay page.
+ * Dropbox permits a custom-scheme redirect URI specifically for PKCE apps (the
+ * authorization-code flow otherwise requires https/localhost), so the code can
+ * return straight to Obsidian, matching the OneDrive backend.
+ */
+const REDIRECT_URI = "obsidian://air-sync-auth";
 const SCOPES = "files.metadata.read files.content.read files.content.write";
 const BACKEND_TYPE = "dropbox";
 
@@ -20,9 +25,9 @@ const BACKEND_TYPE = "dropbox";
  *
  * PKCE means there is NO client secret anywhere — the `code_verifier` is the
  * ephemeral proof. Registered at https://www.dropbox.com/developers/apps with
- * `https://airsync.takezo.dev/callback` as a redirect URI. The Dropbox backend is
- * still labelled "Preview" in the UI, but the key is embedded so it connects with
- * no per-user setup.
+ * `obsidian://air-sync-auth` as a redirect URI (Dropbox allows custom schemes for
+ * PKCE apps). The Dropbox backend is still labelled "Preview" in the UI, but the
+ * key is embedded so it connects with no per-user setup.
  */
 export const DROPBOX_CLIENT_ID = "icsyogaens93hde";
 
@@ -181,9 +186,10 @@ function tokenErrorDetail(res: { json?: unknown; text?: string }): string {
 
 /**
  * Dropbox authentication provider — in-plugin Authorization Code + PKCE, fully
- * worker-less. The authorization code returns via the existing no-secret
- * `callback` relay page (hosted in the air-sync-auth repo); this plugin exchanges
- * it for tokens directly with Dropbox using the ephemeral `code_verifier`.
+ * worker-less. The authorization code returns directly to the in-plugin
+ * `obsidian://air-sync-auth` protocol handler (PKCE permits a custom-scheme
+ * redirect — no relay page); this plugin exchanges it for tokens directly with
+ * Dropbox using the ephemeral `code_verifier`.
  */
 export class DropboxAuthProvider implements IAuthProvider {
 	private tokenAuth: DropboxAuth | null = null;
@@ -231,8 +237,9 @@ export class DropboxAuthProvider implements IAuthProvider {
 	async startAuth(_backendData: Record<string, unknown>): Promise<Record<string, unknown>> {
 		const codeVerifier = generateRandomString(64);
 		const codeChallenge = await computeS256Challenge(codeVerifier);
-		// base64url state (URL-transit safe) via the shared builder; the callback
-		// relay page (air-sync-auth) decodes both base64url and legacy base64.
+		// base64url state (URL-transit safe) via the shared builder; it returns
+		// directly through the obsidian://air-sync-auth deep link and is parsed by
+		// parseDropboxCallback.
 		const state = buildOAuthState();
 		const url = buildDropboxAuthorizeUrl({ clientId: this.clientId, codeChallenge, state });
 		if (Platform.isMobile) {

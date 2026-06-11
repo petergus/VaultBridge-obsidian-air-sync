@@ -100,12 +100,11 @@ correctly seen as unchanged.
 
 In-plugin **Authorization Code + PKCE**, fully worker-less (`fs/dropbox/auth.ts`).
 The app key (`client_id`) is public and there is **no client secret** — the
-ephemeral `code_verifier` is the proof. The authorization code returns through
-the shared no-secret relay page (the `callback/` page in the
-[air-sync-auth](https://github.com/takezoh/air-sync-auth) repo, served at
-`airsync.takezo.dev`) which bounces `?code=…&state=…` to
-`obsidian://air-sync-auth`; the plugin then exchanges the code for tokens
-directly with Dropbox. Refreshing an access token needs only the `client_id`.
+ephemeral `code_verifier` is the proof. The authorization code returns directly
+to the in-plugin `obsidian://air-sync-auth` protocol handler — Dropbox permits a
+custom-scheme redirect URI for PKCE apps, so no relay page is involved (matching
+the OneDrive backend). The plugin then exchanges the code for tokens directly
+with Dropbox. Refreshing an access token needs only the `client_id`.
 
 - **Scope**: App Folder permission with `files.metadata.read`,
   `files.content.read`, `files.content.write` — access is confined to
