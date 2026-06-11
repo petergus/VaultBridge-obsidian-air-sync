@@ -37,7 +37,8 @@ function xorByteAtBit(rgb: Uint8Array, value: number, bitPos: number): void {
 	for (let k = 0; k < 8; k++) {
 		if ((value >> k) & 1) {
 			const pos = (bitPos + k) % WIDTH_IN_BITS;
-			rgb[pos >> 3]! ^= 1 << (pos & 7);
+			const i = pos >> 3;
+			rgb[i] = rgb[i]! ^ (1 << (pos & 7));
 		}
 	}
 }
@@ -62,7 +63,8 @@ export function quickXorHashBase64(data: ArrayBuffer): string {
 	let len = bytes.length;
 	const lengthStart = OUT_BYTES - 8; // 12
 	for (let k = 0; k < 8; k++) {
-		rgb[lengthStart + k]! ^= len & 0xff;
+		const j = lengthStart + k;
+		rgb[j] = rgb[j]! ^ (len & 0xff);
 		len = Math.floor(len / 256);
 	}
 
