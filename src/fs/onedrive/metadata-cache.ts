@@ -35,7 +35,7 @@ export class OneDriveMetadataCache extends AbstractMetadataCache<OneDriveItem> {
 	/**
 	 * Build a FileEntity from cached driveItem metadata (no download). hash is always
 	 * "" because computing it would require downloading the content; the sync engine
-	 * uses remoteChecksum (the locally-reproducible sha1Hash) instead.
+	 * uses remoteChecksum (the locally-reproducible quickXorHash) instead.
 	 */
 	toEntity(path: string, item: OneDriveItem): FileEntity {
 		if (this.isFolder(path)) {

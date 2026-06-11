@@ -105,14 +105,16 @@ describe("itemMtime", () => {
 });
 
 describe("toRemoteChecksum", () => {
-	it("prefers sha1Hash as a locally-computable sha1 checksum", () => {
-		const item = odFile("1", "a.md", "root", { file: { hashes: { sha1Hash: "ABC", quickXorHash: "ignored" } } });
-		expect(toRemoteChecksum(item)).toEqual({ algo: "sha1", value: "ABC" });
+	it("prefers quickXorHash (the only hash personal OneDrive returns), locally computable", () => {
+		const item = odFile("1", "a.md", "root", { file: { hashes: { quickXorHash: "QXR=", sha1Hash: "ignored" } } });
+		expect(toRemoteChecksum(item)).toEqual({ algo: "quickxor", value: "QXR=" });
 	});
 
-	it("falls back to quickXorHash as an opaque checksum", () => {
-		const item = odFile("1", "a.md", "root", { file: { hashes: { quickXorHash: "QXR" } } });
-		expect(toRemoteChecksum(item)).toEqual({ algo: "opaque", value: "QXR" });
+	it("falls back to sha256Hash/sha1Hash (Business/SharePoint), lowercased", () => {
+		const s256 = odFile("1", "a.md", "root", { file: { hashes: { sha256Hash: "ABCDEF" } } });
+		expect(toRemoteChecksum(s256)).toEqual({ algo: "sha256", value: "abcdef" });
+		const s1 = odFile("2", "b.md", "root", { file: { hashes: { sha1Hash: "ABC" } } });
+		expect(toRemoteChecksum(s1)).toEqual({ algo: "sha1", value: "abc" });
 	});
 
 	it("returns undefined when no hash is present", () => {
@@ -121,10 +123,10 @@ describe("toRemoteChecksum", () => {
 });
 
 describe("oneDriveItemToEntity", () => {
-	it("maps a file to a checksum-bearing entity (hash:'' , sha1 algo)", () => {
+	it("maps a file to a checksum-bearing entity (hash:'' , quickxor algo)", () => {
 		const entity = oneDriveItemToEntity("notes/a.md", odFile("1", "a.md", "p", {
 			size: 7,
-			file: { hashes: { sha1Hash: "abc" } },
+			file: { hashes: { quickXorHash: "QXR=" } },
 			fileSystemInfo: { lastModifiedDateTime: "2024-02-02T00:00:00Z" },
 		}));
 		expect(entity).toMatchObject({
@@ -132,7 +134,7 @@ describe("oneDriveItemToEntity", () => {
 			isDirectory: false,
 			size: 7,
 			hash: "",
-			remoteChecksum: { algo: "sha1", value: "abc" },
+			remoteChecksum: { algo: "quickxor", value: "QXR=" },
 		});
 		expect(entity.mtime).toBe(Date.parse("2024-02-02T00:00:00Z"));
 		expect(entity.backendMeta).toMatchObject({ oneDriveId: "1" });

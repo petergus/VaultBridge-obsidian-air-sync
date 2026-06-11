@@ -6,15 +6,15 @@ import { bytes, runRemoteChangeDetectionContract, statOrThrow } from "../remote-
 
 vi.mock("obsidian");
 
-// OneDriveFs returns hash:"" from stat() and relies on remoteChecksum (the sha1Hash)
-// + fileSystemInfo.lastModifiedDateTime for change detection. checksumBased: the
-// metadata-only touch case (mtime bumped, identical sha1) makes the checksum plumbing
-// load-bearing — mtime+size alone cannot decide it.
+// OneDriveFs returns hash:"" from stat() and relies on remoteChecksum (the
+// quickXorHash) + fileSystemInfo.lastModifiedDateTime for change detection.
+// checksumBased: the metadata-only touch case (mtime bumped, identical checksum)
+// makes the checksum plumbing load-bearing — mtime+size alone cannot decide it.
 runRemoteChangeDetectionContract(
 	"OneDriveFs",
 	async () => {
 		let uploaded: OneDriveItem = odFile("f1", "note.md", "root", {
-			file: { hashes: { sha1Hash: "HASH-1" } },
+			file: { hashes: { quickXorHash: "HASH-1" } },
 			size: 11,
 			fileSystemInfo: { lastModifiedDateTime: "2024-01-01T00:00:00Z" },
 		});
@@ -42,9 +42,9 @@ runRemoteChangeDetectionContract(
 				return statOrThrow(fs, path);
 			},
 			async observeAfterEdit() {
-				// A real content edit: new sha1 + bumped mtime + new size.
+				// A real content edit: new checksum + bumped mtime + new size.
 				uploaded = odFile("f1", "note.md", "root", {
-					file: { hashes: { sha1Hash: "HASH-2" } },
+					file: { hashes: { quickXorHash: "HASH-2" } },
 					size: 12,
 					fileSystemInfo: { lastModifiedDateTime: "2024-06-01T00:00:00Z" },
 				});
@@ -52,10 +52,10 @@ runRemoteChangeDetectionContract(
 				return statOrThrow(fs, path);
 			},
 			async observeTouchedSameContent() {
-				// Metadata-only touch: mtime bumped, sha1 + size identical. Only the
-				// sha1 comparison can prove this is "unchanged".
+				// Metadata-only touch: mtime bumped, checksum + size identical. Only the
+				// checksum comparison can prove this is "unchanged".
 				uploaded = odFile("f1", "note.md", "root", {
-					file: { hashes: { sha1Hash: "HASH-1" } },
+					file: { hashes: { quickXorHash: "HASH-1" } },
 					size: 11,
 					fileSystemInfo: { lastModifiedDateTime: "2024-03-01T00:00:00Z" },
 				});

@@ -24,11 +24,11 @@ describe("OneDriveMetadataCache.buildFromFiles (id-chain resolution)", () => {
 		expect([...cache.getChildren("dir")!]).toEqual(["dir/b.md"]);
 	});
 
-	it("projects sha1 checksum + oneDriveId for files and a bare directory for folders", () => {
+	it("projects quickxor checksum + oneDriveId for files and a bare directory for folders", () => {
 		const cache = makeCache();
-		cache.buildFromFiles([odFile("f1", "a.md", ROOT, { size: 5, file: { hashes: { sha1Hash: "H" } } })]);
+		cache.buildFromFiles([odFile("f1", "a.md", ROOT, { size: 5, file: { hashes: { quickXorHash: "H=" } } })]);
 		const file = cache.toEntity("a.md", cache.getFile("a.md")!);
-		expect(file).toMatchObject({ isDirectory: false, size: 5, hash: "", remoteChecksum: { algo: "sha1", value: "H" } });
+		expect(file).toMatchObject({ isDirectory: false, size: 5, hash: "", remoteChecksum: { algo: "quickxor", value: "H=" } });
 		expect(file.backendMeta).toMatchObject({ oneDriveId: "f1" });
 
 		cache.buildFromFiles([odFolder("d1", "dir", ROOT)]);

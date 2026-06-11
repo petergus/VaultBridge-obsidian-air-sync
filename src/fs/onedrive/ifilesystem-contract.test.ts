@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { OneDriveClient } from "./client";
 import type { OneDriveItem, OneDriveDeltaResponse } from "./types";
 import { OneDriveFs } from "./index";
-import { sha1 } from "../../utils/hash";
+import { quickXorHashBase64 } from "../../utils/quickxor";
 import { runIFileSystemContract } from "../ifilesystem-contract";
 
 vi.mock("obsidian");
@@ -18,13 +18,14 @@ interface FakeNode {
 	content?: ArrayBuffer;
 	size: number;
 	mtime: string;
-	sha1?: string;
+	quickXorHash?: string;
 }
 
 /**
  * A CRUD-faithful, in-memory stand-in for {@link OneDriveClient} — an id-addressed
  * driveItem store over which the REAL OneDriveFs runs unchanged. It models the Graph
- * subset the FS calls: id + parentReference.id addressing, sha1 hashes, mtime
+ * subset the FS calls: id + parentReference.id addressing, quickXorHash (what real
+ * personal OneDrive returns — NOT sha1Hash, per ADR 0003 fake fidelity), mtime
  * preserved via a PATCH-equivalent on upload, and a no-op delta (every mutating op
  * already updated the store, so a `list()` replay has nothing to add — delta
  * correctness is the crash-safety contract's job, not this one's).
@@ -43,7 +44,7 @@ function makeFakeOneDriveClient(): OneDriveClient {
 					name: n.name,
 					size: n.size,
 					parentReference: { id: n.parentId, path: "/drive/root:" },
-					file: { hashes: { sha1Hash: n.sha1 } },
+					file: { hashes: { quickXorHash: n.quickXorHash } },
 					fileSystemInfo: { lastModifiedDateTime: n.mtime },
 					lastModifiedDateTime: n.mtime,
 				};
@@ -78,7 +79,7 @@ function makeFakeOneDriveClient(): OneDriveClient {
 			const n = childByName(parentId, name);
 			return n ? Promise.resolve(toItem(n)) : Promise.reject(new Error(`itemNotFound: ${name}`));
 		},
-		upload: async (parentId: string, name: string, content: ArrayBuffer, mtime: number): Promise<OneDriveItem> => {
+		upload: (parentId: string, name: string, content: ArrayBuffer, mtime: number): Promise<OneDriveItem> => {
 			const existing = childByName(parentId, name);
 			const id = existing && !existing.isFolder ? existing.id : newId();
 			const node: FakeNode = {
@@ -89,10 +90,10 @@ function makeFakeOneDriveClient(): OneDriveClient {
 				content: content.slice(0),
 				size: content.byteLength,
 				mtime: new Date(mtime).toISOString(),
-				sha1: await sha1(content),
+				quickXorHash: quickXorHashBase64(content),
 			};
 			nodes.set(id, node);
-			return toItem(node);
+			return Promise.resolve(toItem(node));
 		},
 		createFolder: (parentId: string, name: string): Promise<OneDriveItem> => {
 			const existing = childByName(parentId, name);

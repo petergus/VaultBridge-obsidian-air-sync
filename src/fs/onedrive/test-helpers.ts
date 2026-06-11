@@ -17,7 +17,7 @@ export function odFile(id: string, name: string, parentId: string, overrides: Pa
 		name,
 		size: 10,
 		parentReference: { id: parentId, path: `/drive/root:` },
-		file: { hashes: { sha1Hash: `sha1-${id}` } },
+		file: { hashes: { quickXorHash: `qxh-${id}` } },
 		fileSystemInfo: { lastModifiedDateTime: "2024-01-01T00:00:00Z" },
 		lastModifiedDateTime: "2024-01-01T00:00:00Z",
 		...overrides,

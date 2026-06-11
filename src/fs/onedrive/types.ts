@@ -13,9 +13,10 @@ export type OneDriveFileRecord = FileRecord<OneDriveItem>;
  * That is what lets the shared id-chain path resolver in {@link AbstractMetadataCache}
  * drive OneDrive unchanged (a single-element parent array).
  *
- * Personal OneDrive provides `file.hashes.sha1Hash` — a plain SHA-1 of the whole
- * file, reproducible from local content, so it powers cross-side dedup. A
- * `deleted` facet marks a tombstone in a delta response (the item is gone).
+ * Personal OneDrive provides `file.hashes.quickXorHash` (Microsoft's QuickXorHash,
+ * base64) — and NOT sha1Hash/sha256Hash, which are Business/SharePoint only. It is
+ * reproducible from local content (see utils/quickxor), so it powers cross-side
+ * dedup. A `deleted` facet marks a tombstone in a delta response (item is gone).
  */
 export interface OneDriveItem {
 	id: string;
@@ -141,15 +142,19 @@ export function isFolderEntry(item: OneDriveItem): boolean {
 }
 
 /**
- * Map a driveItem's hashes to a typed RemoteChecksum. Prefers `sha1Hash` (a plain
- * whole-file SHA-1, locally reproducible → drives cross-side dedup); falls back to
- * `quickXorHash` as an opaque value (OneDrive-internal, not locally computable).
- * Returns undefined when neither is present (e.g. a folder).
+ * Map a driveItem's hashes to a typed RemoteChecksum. Personal OneDrive (the only
+ * supported account type) returns ONLY `quickXorHash` — Microsoft dropped `sha1Hash`
+ * for consumer accounts (verified against the live API) — so prefer it; it is locally
+ * reproducible via {@link ../../utils/quickxor}, so it drives cross-side dedup just
+ * like Drive's md5. `sha256Hash`/`sha1Hash` are kept as fallbacks for the
+ * Business/SharePoint shape (lowercased, since Graph reports those uppercase while a
+ * local digest is lowercase). Returns undefined when none is present (e.g. a folder).
  */
 export function toRemoteChecksum(item: OneDriveItem): RemoteChecksum | undefined {
 	const hashes = item.file?.hashes;
-	if (hashes?.sha1Hash) return { algo: "sha1", value: hashes.sha1Hash };
-	if (hashes?.quickXorHash) return { algo: "opaque", value: hashes.quickXorHash };
+	if (hashes?.quickXorHash) return { algo: "quickxor", value: hashes.quickXorHash };
+	if (hashes?.sha256Hash) return { algo: "sha256", value: hashes.sha256Hash.toLowerCase() };
+	if (hashes?.sha1Hash) return { algo: "sha1", value: hashes.sha1Hash.toLowerCase() };
 	return undefined;
 }
 
@@ -174,7 +179,7 @@ export function itemMtime(item: OneDriveItem): number {
  * Build a FileEntity from a cached driveItem (no download).
  *
  * `hash` is always `""` — the sync engine relies on `remoteChecksum` (the
- * `sha1Hash`, locally reproducible) for temporal change detection and cross-side
+ * `quickXorHash`, locally reproducible) for temporal change detection and cross-side
  * dedup. `mtime` uses `fileSystemInfo.lastModifiedDateTime` (the preserved local
  * time), falling back to the server `lastModifiedDateTime`.
  */

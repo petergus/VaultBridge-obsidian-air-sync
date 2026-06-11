@@ -44,10 +44,12 @@ unchanged — the remote path is never stored.
 
 `stat()` returns `hash: ""`; the sync engine compares the item's
 `fileSystemInfo.lastModifiedDateTime` (the preserved local mtime) plus the
-`remoteChecksum`. Personal OneDrive exposes `file.hashes.sha1Hash` — a plain
-whole-file SHA-1, locally reproducible — mapped to `{ algo: "sha1" }` for
-cross-side dedup; it falls back to `quickXorHash` as an `opaque` value when sha1
-is absent.
+`remoteChecksum`. Personal OneDrive exposes ONLY `file.hashes.quickXorHash`
+(Microsoft's QuickXorHash, base64; it does not return `sha1Hash`/`sha256Hash`,
+which are Business/SharePoint only) — mapped to `{ algo: "quickxor" }`. It is
+locally reproducible (`utils/quickxor.ts`, verified against the live API), so it
+drives cross-side dedup just like Drive's md5. `sha256Hash`/`sha1Hash` are kept as
+fallbacks (lowercased) for the Business shape.
 
 ## OneDriveMetadataCache
 
