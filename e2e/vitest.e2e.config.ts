@@ -13,9 +13,11 @@ import { resolve } from "node:path";
 export default defineConfig({
 	test: {
 		include: ["e2e/**/*.e2e.ts"],
-		// Real network round-trips (auth refresh, folder create/delete per test).
-		testTimeout: 60_000,
-		hookTimeout: 120_000,
+		// Generous: a single Dropbox 429 backoff is capped at 64s
+		// (MAX_RATE_LIMIT_DELAY_MS), and a test may do several writes — so a 60s
+		// per-test timeout can trip on rate-limit backoff alone under sequential load.
+		testTimeout: 180_000,
+		hookTimeout: 180_000,
 		// Avoid hammering both backends' rate limits in parallel.
 		fileParallelism: false,
 	},

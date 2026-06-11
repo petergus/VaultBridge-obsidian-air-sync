@@ -48,7 +48,17 @@ if (!creds) {
 		parentId = await makeDriveParent(client);
 	});
 	afterAll(async () => {
-		if (parentId) await cleanupDriveParent(client, parentId);
+		// Best-effort: cleanup is housekeeping, not an assertion. drive.file can't
+		// hard-delete and may 403 on trash under load — don't fail a green run over
+		// leftover folders (they're uniquely named; delete airsync-e2e-* manually).
+		if (!parentId) return;
+		try {
+			await cleanupDriveParent(client, parentId);
+		} catch (err) {
+			console.warn(
+				`[e2e] Drive cleanup failed (delete airsync-e2e-* by hand): ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	});
 
 	runIFileSystemContract(

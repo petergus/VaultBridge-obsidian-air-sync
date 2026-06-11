@@ -117,6 +117,13 @@ was wrong — the real value is the server's clock, not the written one rounded 
 caught it. mtime is **not** Dropbox's change-detection signal anyway; that is the
 content-hash `remoteChecksum` (the change-detection contract is `checksumBased`).
 
+A second divergence the e2e surfaced the same way: the **Drive** CRUD fake leaves
+`modifiedTime` untouched on a rename/move, but the real `files.update` **bumps it to
+"now"** (a metadata write counts as a modification). So mtime survives a rename only on
+local-storage backends; the rename test pins exact mtime-through-rename when
+`computesHashOnStat` (mock/LocalFs) and only requires a finite timestamp otherwise. (Drive
+still preserves the written `modifiedTime` on a plain *write* — that is unaffected.)
+
 **The orchestrator-level convergence path is deliberately out of the FS contracts.** ADR
 0001 **path 2** (state C — a live FS whose in-memory cursor overtook the committed one
 after a failure) cannot be closed by the FS alone; it is the orchestrator's job

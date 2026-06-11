@@ -211,7 +211,16 @@ function registerRenameAndReadContract(ctx: IFileSystemContractCtx): void {
 			await ctx.fs().rename("old.txt", "new.txt");
 			const entity = await ctx.fs().stat("new.txt");
 			expect(entity).not.toBeNull();
-			ctx.expectMtime(entity!.mtime, 12345);
+			// mtime survives a rename only on local-storage backends. A remote rename
+			// is a server-side metadata op that reassigns the timestamp — Google Drive
+			// bumps modifiedTime to "now" (verified by the opt-in e2e, ADR 0003);
+			// Dropbox reports server_modified. computesHashOnStat marks the
+			// local-storage backends (mock, LocalFs), which DO preserve it.
+			if (ctx.computesHashOnStat) {
+				ctx.expectMtime(entity!.mtime, 12345);
+			} else {
+				expect(Number.isFinite(entity!.mtime)).toBe(true);
+			}
 			expect(await readText("new.txt")).toBe("content");
 		});
 	});

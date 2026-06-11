@@ -42,18 +42,26 @@ if (!creds) {
 		undefined,
 		(ms) => new Promise((r) => setTimeout(r, ms)),
 	);
-	let parentId = "";
+	let parentPath = "";
 
 	beforeAll(async () => {
-		parentId = await makeDropboxParent(client);
+		parentPath = await makeDropboxParent(client);
 	});
 	afterAll(async () => {
-		if (parentId) await cleanupDropboxParent(client, parentId);
+		// Best-effort: a cleanup failure must not fail an otherwise-green run.
+		if (!parentPath) return;
+		try {
+			await cleanupDropboxParent(client, parentPath);
+		} catch (err) {
+			console.warn(
+				`[e2e] Dropbox cleanup failed (delete airsync-e2e-* by hand): ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	});
 
 	runIFileSystemContract(
 		"DropboxFs (real)",
-		async () => new DropboxFs(client, await makeDropboxChild(client, parentId)),
+		async () => new DropboxFs(client, await makeDropboxChild(client, parentPath)),
 		// DropboxFs reports server_modified (the upload wall-clock) as mtime, so a
 		// written mtime does not round-trip (unlike the fake, which echoes it back).
 		// Verified by this e2e; see ADR 0003 / dropbox/types.ts.

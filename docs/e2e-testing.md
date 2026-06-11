@@ -92,7 +92,9 @@ npm run test:e2e
   timestamp." mtime is not Dropbox's change-detection signal (that is the content-hash
   `remoteChecksum`), so nothing load-bearing is dropped. This is the documented divergence
   from ADR 0002, surfaced by this e2e.
-- **Leftover folders.** Cleanup runs in `afterAll`; if a run is killed mid-way, delete any
-  stray `airsync-e2e-*` folder from the test account by hand.
+- **Leftover folders.** Cleanup runs in `afterAll` but is **best-effort** — it warns instead
+  of failing the run (Drive's `drive.file` scope can't hard-delete and may 403 on trash under
+  load). Folders are uniquely named, so delete any stray `airsync-e2e-*` from the test account
+  by hand when needed.
 - **Why it is not in CI.** Real network, credentials, and quota make it unsuitable as a gate;
   it backstops — it does not replace — the fast fake-based contracts.
