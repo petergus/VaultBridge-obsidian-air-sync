@@ -1,5 +1,6 @@
 import type { DriveClient } from "../../src/fs/googledrive/client";
 import type { DropboxClient } from "../../src/fs/dropbox/client";
+import type { OneDriveClient } from "../../src/fs/onedrive/client";
 
 /**
  * Per-test isolation for the real-cloud contract run.
@@ -101,4 +102,37 @@ export async function cleanupDropboxParent(
 	parentPath: string,
 ): Promise<void> {
 	await client.deletePath(parentPath);
+}
+
+// ── OneDrive ────────────────────────────────────────────────────────────────
+//
+// The App Folder scope (Files.ReadWrite.AppFolder) confines everything under
+// /me/drive/special/approot, so the per-run parent is created directly inside that
+// app-root item. OneDrive addresses items by their stable driveItem id (like Drive,
+// unlike Dropbox's id warm-up dance), so a freshly-created folder id is usable at once.
+
+/** Create the per-run parent under the App Folder root; returns its id. */
+export async function makeOneDriveParent(client: OneDriveClient): Promise<string> {
+	// Touching `special/approot` provisions the app folder on first access, then we
+	// anchor the throwaway tree under its id.
+	const appRoot = await client.getAppRoot();
+	const folder = await client.createFolder(appRoot.id, uniqueName("airsync-e2e"));
+	return folder.id;
+}
+
+/** Create a fresh empty child folder under the parent; returns its id (per-test root). */
+export async function makeOneDriveChild(
+	client: OneDriveClient,
+	parentId: string,
+): Promise<string> {
+	const folder = await client.createFolder(parentId, uniqueName("t"));
+	return folder.id;
+}
+
+/** Delete the parent and its whole subtree (idempotent: deleteItem no-ops on a 404). */
+export async function cleanupOneDriveParent(
+	client: OneDriveClient,
+	parentId: string,
+): Promise<void> {
+	await client.deleteItem(parentId);
 }

@@ -28,6 +28,30 @@ const BACKEND_TYPE = "onedrive";
  */
 export const ONEDRIVE_CLIENT_ID = "REPLACE_ME";
 
+/**
+ * Build the OneDrive authorization-code + PKCE authorize URL. The single source of
+ * the authorize params for both the in-plugin flow ({@link OneDriveAuthProvider.startAuth})
+ * and the opt-in e2e token bootstrap (ADR 0003), which passes a `http://localhost`
+ * loopback `redirectUri` — so the two can never drift on scope/PKCE params.
+ */
+export function buildOneDriveAuthorizeUrl(opts: {
+	clientId: string;
+	codeChallenge: string;
+	state: string;
+	redirectUri?: string;
+}): string {
+	const params = new URLSearchParams({
+		client_id: opts.clientId,
+		response_type: "code",
+		code_challenge: opts.codeChallenge,
+		code_challenge_method: "S256",
+		scope: SCOPES,
+		redirect_uri: opts.redirectUri ?? REDIRECT_URI,
+		state: opts.state,
+	});
+	return `${AUTHORIZE_URL}?${params.toString()}`;
+}
+
 interface OneDriveCallbackParams {
 	code: string;
 	state: string | undefined;
@@ -81,8 +105,15 @@ export class OneDriveAuth extends BaseOAuthTokenManager {
 		return "OneDrive session expired. Please reconnect in settings.";
 	}
 
-	/** Exchange an authorization code for tokens (PKCE — no client secret). */
-	async exchangeCode(code: string, codeVerifier: string): Promise<void> {
+	/**
+	 * Exchange an authorization code for tokens (PKCE — no client secret).
+	 *
+	 * `redirectUri` must match the one used in the authorize request and defaults to
+	 * the in-plugin {@link REDIRECT_URI}. The opt-in e2e bootstrap (ADR 0003) overrides
+	 * it with a `http://localhost:<port>` loopback so a headless CLI can capture the
+	 * redirect directly.
+	 */
+	async exchangeCode(code: string, codeVerifier: string, redirectUri: string = REDIRECT_URI): Promise<void> {
 		const res = await requestUrl({
 			url: TOKEN_URL,
 			method: "POST",
@@ -93,7 +124,7 @@ export class OneDriveAuth extends BaseOAuthTokenManager {
 				code,
 				code_verifier: codeVerifier,
 				client_id: this.clientId,
-				redirect_uri: REDIRECT_URI,
+				redirect_uri: redirectUri,
 				scope: SCOPES,
 			}).toString(),
 		});
@@ -192,16 +223,7 @@ export class OneDriveAuthProvider implements IAuthProvider {
 		const codeVerifier = generateRandomString(64);
 		const codeChallenge = await computeS256Challenge(codeVerifier);
 		const state = buildOAuthState();
-		const params = new URLSearchParams({
-			client_id: this.clientId,
-			response_type: "code",
-			code_challenge: codeChallenge,
-			code_challenge_method: "S256",
-			scope: SCOPES,
-			redirect_uri: REDIRECT_URI,
-			state,
-		});
-		const url = `${AUTHORIZE_URL}?${params.toString()}`;
+		const url = buildOneDriveAuthorizeUrl({ clientId: this.clientId, codeChallenge, state });
 		if (Platform.isMobile) {
 			window.location.href = url;
 		} else {

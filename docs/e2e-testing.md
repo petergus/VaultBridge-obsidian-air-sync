@@ -1,7 +1,7 @@
 # End-to-end testing against real backends
 
 The unit suite verifies each backend with the shared `runIFileSystemContract` over
-**in-memory fakes** of the Google Drive / Dropbox clients (see
+**in-memory fakes** of the Google Drive / Dropbox / OneDrive clients (see
 [ADR 0002](adr/0002-backends-verified-by-shared-behaviour-contracts.md)). That is fast and
 runs in CI, but a fake can drift from the real API and every test stays green.
 
@@ -15,9 +15,10 @@ The **opt-in e2e** runs that *same* contract against the **live** APIs to catch 
 ## TL;DR
 
 ```bash
-cp .env.e2e.example .env.e2e          # gitignored; fill the Google client id/secret first
+cp .env.e2e.example .env.e2e          # gitignored; fill the Google + OneDrive client ids first
 npm run e2e:bootstrap -- google       # authorize in the browser → token auto-written to .env.e2e
 npm run e2e:bootstrap -- dropbox      # authorize in the browser → token auto-written to .env.e2e
+npm run e2e:bootstrap -- onedrive     # authorize in the browser → token auto-written to .env.e2e
 npm run test:e2e                      # runs the contract against the live APIs
 ```
 
@@ -27,8 +28,8 @@ it can never break anything if run by accident.
 ## Prerequisites
 
 - Node 20 or 22 (the e2e transport uses the global `fetch`).
-- A **test** Google and/or Dropbox account. Each backend is independent: provide one token to
-  test just that backend; the other warns and skips.
+- A **test** Google, Dropbox, and/or (personal) Microsoft account. Each backend is
+  independent: provide one token to test just that backend; the others warn and skip.
 
 ## One-time OAuth-app setup (loopback)
 
@@ -45,11 +46,18 @@ redirect URI once:
 - **Dropbox** — on the app at <https://www.dropbox.com/developers/apps> add
   `http://localhost:53682/callback` under **Redirect URIs**. It uses the public PKCE client id
   (no secret).
+- **OneDrive** — the shipped client id is a placeholder (`REPLACE_ME`), so the e2e uses **your
+  own** Entra app, exactly like Google. At <https://entra.microsoft.com> register an app with
+  **"Personal Microsoft accounts only"**, the **Files.ReadWrite.AppFolder** delegated
+  permission, and a `http://localhost:53682/callback` redirect URI (platform "Mobile and
+  desktop"); put its application (client) id in `.env.e2e` (`AIRSYNC_E2E_ONEDRIVE_CLIENT_ID`).
+  PKCE means no secret. The OneDrive e2e refreshes with this same client (the refresh token is
+  bound to it), so — unlike Dropbox — the client id is required even when a token is present.
 
 ## Obtaining refresh tokens
 
-`npm run e2e:bootstrap -- <google|dropbox>` reuses the shipped auth code (`GoogleAuthDirect` /
-`DropboxAuth`) and:
+`npm run e2e:bootstrap -- <google|dropbox|onedrive>` reuses the shipped auth code
+(`GoogleAuthDirect` / `DropboxAuth` / `OneDriveAuth`) and:
 
 1. Starts a localhost loopback server and prints an authorization URL.
 2. You open it and approve — the browser is redirected back to the loopback, which captures the
@@ -68,6 +76,8 @@ Read from the real environment or a gitignored `.env.e2e` at the repo root (real
 | `AIRSYNC_E2E_GOOGLE_CLIENT_SECRET` | Google Drive — your GCP OAuth client secret |
 | `AIRSYNC_E2E_GOOGLE_REFRESH_TOKEN` | Google Drive — minted by the bootstrap |
 | `AIRSYNC_E2E_DROPBOX_REFRESH_TOKEN` | Dropbox — minted by the bootstrap |
+| `AIRSYNC_E2E_ONEDRIVE_CLIENT_ID` | OneDrive — your Entra app client id (for loopback + refresh) |
+| `AIRSYNC_E2E_ONEDRIVE_REFRESH_TOKEN` | OneDrive — minted by the bootstrap |
 | `AIRSYNC_E2E_OAUTH_PORT` | Optional loopback port (default 53682) |
 
 ## Running
@@ -75,12 +85,13 @@ Read from the real environment or a gitignored `.env.e2e` at the repo root (real
 It is **never** part of `npm test`, the lint gate, or CI — run it explicitly, when needed:
 
 ```bash
-npm run test:e2e          # both backends — the two run IN PARALLEL
-npm run test:e2e:google   # Google Drive only
-npm run test:e2e:dropbox  # Dropbox only
+npm run test:e2e           # all backends — the per-backend files run IN PARALLEL
+npm run test:e2e:google    # Google Drive only
+npm run test:e2e:dropbox   # Dropbox only
+npm run test:e2e:onedrive  # OneDrive only
 ```
 
-- `npm run test:e2e` runs the two per-backend files **concurrently** (different services =
+- `npm run test:e2e` runs the per-backend files **concurrently** (different services =
   different rate-limit buckets); tests **within** a backend stay sequential, so a single
   backend is never hammered.
 - The full `runIFileSystemContract` runs against each live API. A fresh child folder is created
@@ -91,7 +102,8 @@ npm run test:e2e:dropbox  # Dropbox only
 
 > Running Google individually needs `AIRSYNC_E2E_GOOGLE_CLIENT_ID`/`_CLIENT_SECRET` in
 > `.env.e2e` (the refresh token alone falls back to the built-in auth server, which can't
-> refresh a token minted by your own OAuth client).
+> refresh a token minted by your own OAuth client). OneDrive likewise needs
+> `AIRSYNC_E2E_ONEDRIVE_CLIENT_ID` (the shipped placeholder client id can't refresh your token).
 
 ## Notes
 
@@ -102,6 +114,10 @@ npm run test:e2e:dropbox  # Dropbox only
   timestamp." mtime is not Dropbox's change-detection signal (that is the content-hash
   `remoteChecksum`), so nothing load-bearing is dropped. This is the documented divergence
   from ADR 0002, surfaced by this e2e.
+- **OneDrive mtime.** Unlike Dropbox, `OneDriveFs` PATCHes `fileSystemInfo.lastModifiedDateTime`
+  right after the content PUT, so a written mtime *does* round-trip (like Drive). The OneDrive
+  suite therefore keeps the default `preservesWrittenMtime: true`. OneDrive runs under the App
+  Folder scope, so the throwaway `airsync-e2e-*` tree is created inside `special/approot`.
 - **Leftover folders.** Cleanup runs in `afterAll` but is **best-effort** — it warns instead
   of failing the run (Drive's `drive.file` scope can't hard-delete and may 403 on trash under
   load). Folders are uniquely named, so delete any stray `airsync-e2e-*` from the test account

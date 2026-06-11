@@ -15,6 +15,7 @@
 		"test:e2e": "vitest run --config e2e/vitest.e2e.config.ts",
 		"test:e2e:google": "vitest run --config e2e/vitest.e2e.config.ts googledrive",
 		"test:e2e:dropbox": "vitest run --config e2e/vitest.e2e.config.ts dropbox",
+		"test:e2e:onedrive": "vitest run --config e2e/vitest.e2e.config.ts onedrive",
 		"e2e:bootstrap": "node e2e/run-bootstrap.mjs"
 	},
 	"keywords": [],
