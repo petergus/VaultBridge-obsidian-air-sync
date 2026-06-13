@@ -146,6 +146,13 @@ export class SyncOrchestrator {
 			return;
 		}
 
+		// A runSync arriving while locked is a debounce-fired VAULT change (or a
+		// rescan): set syncPending so the do/while runs another cycle and the
+		// snapshot-surviving dirty path is consumed on HOT. SIGNAL triggers never
+		// reach here — triggerSync's isSyncing() guard already dropped them. Do not
+		// recast syncPending as "dirty exists": markDirty does not set it, so a
+		// dirty-count loop would bypass the 5s debounce and tight-loop during
+		// continuous editing (ADR 0004).
 		if (this.syncMutex.isLocked) {
 			this.syncPending = true;
 			return;

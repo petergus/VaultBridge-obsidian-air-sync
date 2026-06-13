@@ -202,6 +202,8 @@ Failed actions are not committed; they will be re-detected on the next sync cycl
 
 All triggers are event-driven — there is no periodic timer. All triggers except file-open run a full sync cycle through the pipeline. Out-of-scope paths (failing either gate of `isExcluded()` — dot-path scope or `ignorePatterns`) are excluded at the vault-event level — dirty marks and debounce are skipped entirely. The file-open priority pull also skips out-of-scope paths.
 
+These triggers are **classified** ([ADR 0004](adr/0004-sync-reruns-are-classified-by-trigger.md)): **signal** triggers (focus/visibility/online) carry no local change and route through `triggerSync()`, whose `isSyncing()` guard **discards** them while a sync is in flight (the in-flight cycle already does the re-scan they ask for); **vault** triggers carry a real edit and route through `markDirty` + `debouncedSync()`, so they re-run via `syncPending` even mid-sync. That guard and the `syncPending` loop are load-bearing — see the ADR before collapsing them into a single "loop while dirty" rule.
+
 ## Active file priority sync
 
 `SyncScheduler.wireFileOpenEvent()` hooks the `file-open` workspace event. When a user opens a file:

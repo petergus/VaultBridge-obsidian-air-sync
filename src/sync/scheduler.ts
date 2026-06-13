@@ -70,7 +70,16 @@ export class SyncScheduler {
 		this.debouncedSync.cancel();
 	}
 
-	/** Trigger a full sync now, unless no backend is configured or one is already running. */
+	/**
+	 * Trigger a full sync now, unless no backend is configured or one is already
+	 * running. This is the SIGNAL path (focus/visibility/online): the
+	 * `isSyncing()` guard discards the request while a sync is in flight — the
+	 * in-flight cycle already performs the full re-scan a signal asks for. The
+	 * guard is load-bearing, NOT redundant with runSync's own lock check:
+	 * runSync's check sets `syncPending` (a re-run), this one suppresses it for
+	 * signals. Removing it makes a signal set syncPending and run a redundant
+	 * WARM full scan (ADR 0004).
+	 */
 	private triggerSync(): void {
 		if (!this.deps.remoteFs()) return;
 		if (this.deps.orchestrator.isSyncing()) return;
