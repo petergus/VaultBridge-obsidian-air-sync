@@ -71,9 +71,9 @@ After any temperature mode collects entries, `collectChanges()` runs `enrichHash
 
 `list()` returns `hash: ""` for performance. Without enrichment, the decision engine cannot distinguish identical files from conflicts (both hashes are falsy). The enrichment step:
 
-1. Filters to entries where `local.size === remote.size` and `remote.backendMeta.contentChecksum` is available
-2. Reads local file content and computes MD5 (via `js-md5`)
-3. Compares with Google Drive's `contentChecksum` (MD5 from the files.list API response)
+1. Filters to entries where `local.size === remote.size` and `remote.remoteChecksum` is available (and its algo is locally computable)
+2. Reads local file content and computes a digest in the remote checksum's algorithm (e.g. MD5 for Google Drive, via `js-md5`)
+3. Compares with the remote's `remoteChecksum.value` (e.g. Google Drive MD5 from the files.list API response)
 4. If match: computes SHA-256 from the same content and sets it on both entities so the decision engine returns `match`
 5. If mismatch: leaves hashes empty → decision engine returns `conflict`
 
@@ -107,7 +107,7 @@ hash costs I/O, so it leads with the hash only when one is already on hand):
 `hasRemoteChanged(file, record)` -- remote file vs baseline:
 
 1. mtime + size comparison
-2. If mtime/size differ, check `backendMeta.contentChecksum` (e.g. Google Drive md5Checksum)
+2. If mtime/size differ, check `remoteChecksum` (e.g. Google Drive md5Checksum), when both sides expose the same algorithm
 3. Fall back to hash comparison
 4. Conservative: treat as changed if undeterminable
 

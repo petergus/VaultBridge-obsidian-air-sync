@@ -59,7 +59,7 @@ One row per directory; see the layer diagram and per-doc references for module d
      │                                    │
      │  collectChanges()                  │  ChangeDetector
      │    collect (hot / warm / cold)     │    temperature modes
-     │    enrichHashesForInitialMatch()   │    MD5 vs contentChecksum
+     │    enrichHashesForInitialMatch()   │    local digest vs remoteChecksum
      │        │                           │
      │        ▼                           │
      │  planSync()                        │  DecisionEngine

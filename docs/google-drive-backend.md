@@ -36,7 +36,7 @@ This step 3 is the **compare-and-swap** of an optimistic protocol: releasing the
 
 ### stat() and hash
 
-`stat()` always returns `hash: ""`. The sync engine uses `backendMeta.contentChecksum` (Google Drive's `md5Checksum`) for remote change detection via `hasRemoteChanged()`. This avoids downloading file content just to compute a hash.
+`stat()` always returns `hash: ""`. The sync engine uses `remoteChecksum` (Google Drive's `md5Checksum`, tagged `{ algo: "md5", value }`) for remote change detection via `hasRemoteChanged()`. This avoids downloading file content just to compute a hash.
 
 `stat()` and `read()` deliberately do NOT apply incremental changes -- `list()` is always called first in the sync cycle and refreshes the cache, so these only read it. For folders, the returned entity is `{ isDirectory:true, size:0, mtime:0, hash:"" }` with no `backendMeta`.
 
@@ -63,7 +63,7 @@ Key operations:
 - `applyFileChangeDetectMove(file)`: wraps `applyFileChange()` with before/after path comparison. Returns `{ oldPath, newPath, wasFolder, oldDescendants }` for move detection.
 - `removeTree(path)`: removes a path and all descendants (via `collectDescendants()`).
 - `rewriteChildPaths(old, new)`: rewrites descendant paths when a folder is renamed.
-- `googleDriveFileToEntity(path, googleDriveFile)`: converts cached metadata to `FileEntity` without downloading content. Folders → `{ isDirectory:true, size:0, mtime:0, hash:"" }` (no `backendMeta`). Files → `size = parseInt(size||"0")`, `mtime = new Date(modifiedTime).getTime()` (0 if NaN/absent), `hash:""`, `backendMeta:{ googleDriveId, contentChecksum: md5Checksum }`. This `contentChecksum == Google Drive md5` is what makes hash-enrichment and `hasRemoteChanged()` work without a download.
+- `googleDriveFileToEntity(path, googleDriveFile)`: converts cached metadata to `FileEntity` without downloading content. Folders → `{ isDirectory:true, size:0, mtime:0, hash:"" }` (no `backendMeta`). Files → `size = parseInt(size||"0")`, `mtime = new Date(modifiedTime).getTime()` (0 if NaN/absent), `hash:""`, `remoteChecksum:{ algo:"md5", value: md5Checksum }`, `backendMeta:{ googleDriveId }`. That `remoteChecksum` (Google Drive md5) is what makes hash-enrichment and `hasRemoteChanged()` work without a download.
 
 ## Incremental sync
 
