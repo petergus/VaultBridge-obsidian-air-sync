@@ -98,6 +98,75 @@ describe("applyDropboxDelta — official algorithm", () => {
 		expect(result.renamedPaths).toEqual([{ oldPath: "dir", newPath: "papers", isFolder: true }]);
 	});
 
+	// ── Order-independence (ADR 0006): Dropbox does not guarantee the moved entry
+	// precedes the deleted(old) tombstone. These pin the DELETE-FIRST ordering, which
+	// before the upserts-before-deletes reorder degraded a folder rename to a
+	// file-by-file delete+pull of the whole subtree.
+
+	it("coalesces a file rename even when deleted(old) arrives BEFORE the moved file", async () => {
+		const cache = seededCache();
+		// deleted(old) first, then the same-id add at the new path.
+		const client = fakeClient([page([dbxDeleted("/root/a.md"), dbxFile("1", "/root/renamed.md")])]);
+		const result = await applyDropboxDelta({ cache, client }, "cur");
+		if (result.needsFullScan) throw new Error("unexpected reset");
+
+		expect(cache.hasFile("renamed.md")).toBe(true);
+		expect(cache.hasFile("a.md")).toBe(false);
+		expect(cache.getPathById("id:1")).toBe("renamed.md");
+		expect(result.renamedPaths).toEqual([{ oldPath: "a.md", newPath: "renamed.md", isFolder: undefined }]);
+	});
+
+	it("coalesces a folder rename even when deleted(old) arrives BEFORE the moved folder", async () => {
+		const cache = seededCache();
+		// The reported bug's ordering: deleted(old folder) precedes the moved folder.
+		const client = fakeClient([page([dbxDeleted("/root/dir"), dbxFolder("2", "/root/papers")])]);
+		const result = await applyDropboxDelta({ cache, client }, "cur");
+		if (result.needsFullScan) throw new Error("unexpected reset");
+
+		expect(cache.hasFile("papers")).toBe(true);
+		expect(cache.hasFile("papers/b.md")).toBe(true);
+		expect(cache.hasFile("dir")).toBe(false);
+		expect(cache.hasFile("dir/b.md")).toBe(false);
+		// One folder rename pair — NOT a per-file delete+add of the subtree.
+		expect(result.renamedPaths).toEqual([{ oldPath: "dir", newPath: "papers", isFolder: true }]);
+	});
+
+	it("coalesces a folder rename when its child upsert is listed before the parent folder", async () => {
+		const cache = seededCache();
+		// Adversarial ordering: child add, then the old-folder delete, then the parent add.
+		const client = fakeClient([
+			page([
+				dbxFile("3", "/root/papers/b.md"),
+				dbxDeleted("/root/dir"),
+				dbxFolder("2", "/root/papers"),
+			]),
+		]);
+		const result = await applyDropboxDelta({ cache, client }, "cur");
+		if (result.needsFullScan) throw new Error("unexpected reset");
+
+		expect(cache.hasFile("papers")).toBe(true);
+		expect(cache.hasFile("papers/b.md")).toBe(true);
+		expect(cache.hasFile("dir")).toBe(false);
+		// The folder rename is reported once; the child does not produce a second pair.
+		expect(result.renamedPaths).toEqual([{ oldPath: "dir", newPath: "papers", isFolder: true }]);
+	});
+
+	it("does NOT coalesce delete-then-recreate at the same path with a DIFFERENT id", async () => {
+		const cache = seededCache();
+		// Same path, new id: a genuine delete + create, never a rename. The recreated
+		// file must survive (the trailing/leading deleted(old) must not drop it).
+		const client = fakeClient([page([dbxDeleted("/root/a.md"), dbxFile("99", "/root/a.md")])]);
+		const result = await applyDropboxDelta({ cache, client }, "cur");
+		if (result.needsFullScan) throw new Error("unexpected reset");
+
+		expect(cache.hasFile("a.md")).toBe(true);
+		expect(cache.getPathById("id:99")).toBe("a.md");
+		expect(cache.getPathById("id:1")).toBeUndefined();
+		expect(result.renamedPaths).toEqual([]);
+		const delta = classify(cache, result.changedPaths);
+		expect(delta.modified).toContain("a.md"); // surfaced as a content change, not a rename
+	});
+
 	it("signals needsFullScan on a cursor reset", async () => {
 		const cache = seededCache();
 		const result = await applyDropboxDelta({ cache, client: resetClient() }, "cur");
