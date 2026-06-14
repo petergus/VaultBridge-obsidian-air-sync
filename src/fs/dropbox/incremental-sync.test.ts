@@ -75,7 +75,8 @@ describe("applyDropboxDelta — official algorithm", () => {
 
 	it("coalesces a same-id move into a rename and ignores the stale deleted(old)", async () => {
 		const cache = seededCache();
-		// The add for the moved file arrives first; the trailing deleted(old) is stale.
+		// Add-first ordering (the delete-first twin is covered below); either way the
+		// drained delta is normalized to upserts-before-deletes, so deleted(old) is stale.
 		const client = fakeClient([page([dbxFile("1", "/root/renamed.md"), dbxDeleted("/root/a.md")])]);
 		const result = await applyDropboxDelta({ cache, client }, "cur");
 		if (result.needsFullScan) throw new Error("unexpected reset");
@@ -165,6 +166,31 @@ describe("applyDropboxDelta — official algorithm", () => {
 		expect(result.renamedPaths).toEqual([]);
 		const delta = classify(cache, result.changedPaths);
 		expect(delta.modified).toContain("a.md"); // surfaced as a content change, not a rename
+	});
+
+	it("surfaces an evicted child when a FOLDER is deleted and recreated at the same path with a new id", async () => {
+		const cache = seededCache(); // dir(id:2) + dir/b.md(id:3)
+		// Delete folder dir and recreate a NEW folder dir (different id) holding a new file.
+		// The old child dir/b.md must still surface as a deletion — otherwise the local copy
+		// orphans until the next full scan (the eviction happens inside setEntry, which
+		// records nothing, and the stale deleted(dir) is guarded out).
+		const client = fakeClient([
+			page([
+				dbxDeleted("/root/dir"),
+				dbxFolder("5", "/root/dir"),
+				dbxFile("6", "/root/dir/new.md"),
+			]),
+		]);
+		const result = await applyDropboxDelta({ cache, client }, "cur");
+		if (result.needsFullScan) throw new Error("unexpected reset");
+
+		expect(cache.getPathById("id:5")).toBe("dir"); // the recreated folder survives
+		expect(cache.hasFile("dir/new.md")).toBe(true);
+		expect(cache.hasFile("dir/b.md")).toBe(false); // the old child is gone
+		expect(result.renamedPaths).toEqual([]); // different id ⇒ not a rename
+		const delta = classify(cache, result.changedPaths);
+		expect(delta.deleted).toContain("dir/b.md"); // …and reported as deleted, not silently dropped
+		expect(delta.modified).toEqual(expect.arrayContaining(["dir", "dir/new.md"]));
 	});
 
 	it("signals needsFullScan on a cursor reset", async () => {

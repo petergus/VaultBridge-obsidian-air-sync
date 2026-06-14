@@ -1,5 +1,6 @@
 import type { DropboxEntry } from "./types";
 import { isDropboxResetError } from "./types";
+import { segments } from "./metadata-cache";
 import type { DropboxMetadataCache } from "./metadata-cache";
 import { LIST_PAGE_CAP } from "./client";
 import type { DropboxClient } from "./client";
@@ -82,54 +83,68 @@ export async function applyDropboxDelta(ctx: DropboxSyncContext, cursor: string)
 	return { needsFullScan: false, newToken: cur, changedPaths: acc.changedPaths, renamedPaths: acc.renamedPaths };
 }
 
+/** A delta entry paired with its relativized vault path (null = outside the root). */
+interface PathedEntry {
+	entry: DropboxEntry;
+	path: string | null;
+}
+
+/** True for a path that the cache cannot track (outside root, root itself, reserved). */
+function isUntrackable(path: string | null): boolean {
+	return path === null || path === "" || path === INTERNAL_METADATA_PATH;
+}
+
 /**
  * Apply a fully-drained delta order-independently (ADR 0006): all upserts first, then all
  * deletes. Upserts are sorted folders-then-shallow-first (parity with the id-addressed
  * backends' `applyIdDeltaPage`) so a child resolves against an already-placed/renamed parent
  * and a nested folder rename coalesces to one pair. A `deleted` is then a no-op unless its
- * path still holds an entry — and even then it is **skipped when that occupant's id was
- * upserted in this same delta** (`upsertIds`): the path was reclaimed as a rename target,
- * or this is a delete-then-recreate-at-the-same-path with a *different* id (the upsert
- * already evicted the old occupant). Removing it would drop the live file.
+ * path still holds an entry — and even then it is **skipped when that path was (re)written
+ * by an upsert in this same delta** (`upsertedPaths`): the path was reclaimed as a rename
+ * target, or this is a delete-then-recreate-at-the-same-path with a *different* id (the
+ * upsert already evicted the old occupant). Removing it would drop the live file. The guard
+ * keys on PATH, not id, because Dropbox `deleted` tombstones carry no id and an upsert's
+ * `id` is itself optional.
  */
 function applyEntries(ctx: DropboxSyncContext, acc: DeltaAccumulator, entries: DropboxEntry[]): void {
-	const upserts: DropboxEntry[] = [];
-	const deletes: DropboxEntry[] = [];
+	const cache = ctx.cache;
+	const upserts: PathedEntry[] = [];
+	const deletes: PathedEntry[] = [];
 	for (const entry of entries) {
-		(entry[".tag"] === "deleted" ? deletes : upserts).push(entry);
+		const target = entry[".tag"] === "deleted" ? deletes : upserts;
+		target.push({ entry, path: cache.relativize(entry) });
 	}
 
 	// Folders before files, then shallow-first by path depth — so a parent folder's
 	// rename is applied (rewriting child paths) before any child entry is processed.
 	upserts.sort((a, b) => {
-		const aFolder = a[".tag"] === "folder" ? 0 : 1;
-		const bFolder = b[".tag"] === "folder" ? 0 : 1;
+		const aFolder = a.entry[".tag"] === "folder" ? 0 : 1;
+		const bFolder = b.entry[".tag"] === "folder" ? 0 : 1;
 		if (aFolder !== bFolder) return aFolder - bFolder;
-		return pathDepth(a.path_display) - pathDepth(b.path_display);
+		return depthOf(a.path) - depthOf(b.path);
 	});
 
-	const upsertIds = new Set<string>();
-	for (const entry of upserts) if (entry.id) upsertIds.add(entry.id);
+	const upsertedPaths = new Set<string>();
+	for (const u of upserts) if (!isUntrackable(u.path)) upsertedPaths.add(u.path!);
 
-	for (const entry of upserts) applyUpsertEntry(ctx, acc, entry);
-	for (const entry of deletes) applyDeleteEntry(ctx, acc, entry, upsertIds);
+	for (const u of upserts) applyUpsertEntry(ctx, acc, u.entry, u.path);
+	for (const d of deletes) applyDeleteEntry(ctx, acc, d.entry, d.path, upsertedPaths);
 }
 
-/** Number of non-empty path segments (used to order folders shallow-first). */
-function pathDepth(path: string): number {
-	return path.split("/").filter(Boolean).length;
+/** Depth (non-empty segment count) of a relativized path; an untrackable path sorts first. */
+function depthOf(path: string | null): number {
+	return path === null ? 0 : segments(path).length;
 }
 
 /** Apply a single `file`/`folder` upsert to the cache and accumulate the resulting paths. */
-function applyUpsertEntry(ctx: DropboxSyncContext, acc: DeltaAccumulator, entry: DropboxEntry): void {
+function applyUpsertEntry(ctx: DropboxSyncContext, acc: DeltaAccumulator, entry: DropboxEntry, path: string | null): void {
 	const cache = ctx.cache;
-	const path = cache.relativize(entry);
 
 	// Untrackable destination: outside the vault root, the root folder itself, or
 	// the reserved backend metadata path. These are never cached, so never build a
 	// record from them. If a previously tracked entry MOVED here (same id), surface
 	// its disappearance from the old location and drop it; otherwise ignore.
-	if (path === null || path === "" || path === INTERNAL_METADATA_PATH) {
+	if (isUntrackable(path)) {
 		const oldPath = entry.id ? cache.getPathById(entry.id) : undefined;
 		if (oldPath !== undefined) {
 			for (const p of [oldPath, ...cache.collectDescendants(oldPath)]) {
@@ -142,13 +157,20 @@ function applyUpsertEntry(ctx: DropboxSyncContext, acc: DeltaAccumulator, entry:
 
 	const oldPath = entry.id ? cache.getPathById(entry.id) : undefined;
 	if (oldPath !== undefined && oldPath !== path) {
-		applyRename(cache, acc, entry, oldPath, path);
+		applyRename(cache, acc, entry, oldPath, path!);
 		return;
 	}
 
-	// New file/folder, or in-place modify (same path).
-	cache.setEntry(path, entry);
-	acc.changedPaths.add(path);
+	// New path or in-place modify. When a DIFFERENT entry currently occupies `path`
+	// (delete-then-recreate at the same path with a new id), `setEntry` evicts its whole
+	// subtree but reports nothing — record the displaced descendants here, or they vanish
+	// from the cache without ever being classified as deletions. A truly new path (no
+	// occupant) or a same-id in-place modify (oldPath === path) leaves this an empty no-op.
+	if (oldPath === undefined) {
+		for (const d of cache.collectDescendants(path!)) acc.changedPaths.add(d);
+	}
+	cache.setEntry(path!, entry);
+	acc.changedPaths.add(path!);
 }
 
 /** Apply a single `deleted` tombstone, guarded against a path reclaimed by an upsert. */
@@ -156,24 +178,23 @@ function applyDeleteEntry(
 	ctx: DropboxSyncContext,
 	acc: DeltaAccumulator,
 	entry: DropboxEntry,
-	upsertIds: ReadonlySet<string>,
+	path: string | null,
+	upsertedPaths: ReadonlySet<string>,
 ): void {
 	const cache = ctx.cache;
-	const path = cache.relativize(entry);
-	if (path === null || path === "" || path === INTERNAL_METADATA_PATH) return;
-	if (!cache.hasFile(path)) return; // already gone (e.g. vacated by a rename) → ignore
+	if (isUntrackable(path)) return;
+	if (!cache.hasFile(path!)) return; // already gone (e.g. vacated by a rename) → ignore
 
-	// Stale tombstone: the path is now held by an entry this delta upserted (rename
-	// target or same-path recreate with a different id). The upsert is authoritative;
+	// Stale tombstone: this path was (re)written by an upsert in the same delta (rename
+	// target, or same-path recreate with a different id). The upsert is authoritative;
 	// removing the subtree would drop the live file. See applyEntries / ADR 0006.
-	const occupantId = cache.idAt(path);
-	if (occupantId !== undefined && upsertIds.has(occupantId)) return;
+	if (upsertedPaths.has(path!)) return;
 
-	const descendants = cache.collectDescendants(path);
-	for (const p of [path, ...descendants]) {
+	const descendants = cache.collectDescendants(path!);
+	for (const p of [path!, ...descendants]) {
 		acc.changedPaths.add(p);
 	}
-	cache.removeTree(path);
+	cache.removeTree(path!);
 }
 
 /** Coalesce a `deleted(old)`+`file/folder(new)` pair (same id) into a rename. */
