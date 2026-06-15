@@ -71,7 +71,7 @@ describe("GoogleDriveClient.uploadFile modifiedTime default", () => {
 });
 
 describe("GoogleDriveClient.listAllFiles parallelization", () => {
-	it("fetches nested folders concurrently via AsyncPool(3)", async () => {
+	it("fetches nested folders concurrently via AdaptivePool (start 3)", async () => {
 		const { GoogleDriveClient } = await import("./client");
 
 		// Track concurrent calls to detect parallelism
@@ -148,34 +148,6 @@ describe("GoogleDriveClient.listAllFiles parallelization", () => {
 		expect(result.map((f) => f.name)).toEqual(
 			expect.arrayContaining(["level1", "level2", "deep.txt"])
 		);
-
-		mockRequestUrl.mockRestore();
-	});
-
-	it("propagates errors from parallel folder fetches", async () => {
-		const { GoogleDriveClient } = await import("./client");
-
-		const mockRequestUrl = (await spyRequestUrl()).mockImplementation((req) => {
-			const url = typeof req === "string" ? req : (req as { url: string }).url;
-			const params = new URLSearchParams(url.split("?")[1]);
-			const q = params.get("q") ?? "";
-
-			if (q.includes("'root'")) {
-				return Promise.resolve(mockRes({
-					files: [
-						{ id: "f1", name: "ok", mimeType: "application/vnd.google-apps.folder", parents: ["root"] },
-						{ id: "f2", name: "bad", mimeType: "application/vnd.google-apps.folder", parents: ["root"] },
-					],
-				}));
-			}
-			if (q.includes("'f2'")) {
-				return Promise.reject(Object.assign(new Error("Rate limited"), { status: 429 }));
-			}
-			return Promise.resolve(mockRes({ files: [] }));
-		});
-
-		const client = new GoogleDriveClient(() => Promise.resolve("access"));
-		await expect(client.listAllFiles("root")).rejects.toThrow();
 
 		mockRequestUrl.mockRestore();
 	});

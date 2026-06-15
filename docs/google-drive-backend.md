@@ -11,7 +11,7 @@ The remote delta cursor (`changesPageToken`) has a single source of truth: the `
 On first `list()`, `stat()`, `read()`, or `write()`, `ensureInitialized()` runs:
 
 1. **Checkpoint present** (file map + cursor restored together): `loadFromCache()` reads both the file map and the cursor (`META_STORE`) from IndexedDB — they were committed in one transaction, so a checkpoint exists only when **both** are present. An incremental replay is warranted.
-2. **No checkpoint** (genuine first sync, an empty/missing store, or after a rescan / state clear): `fullScan()` clears the cache, fetches a fresh changes start token BEFORE listing (so changes that land during the scan are not missed), runs `listAllFiles()` recursively with `AsyncPool(3)` concurrency, builds the `GoogleDriveMetadataCache` from the flat file list, and marks the FS initialized. No replay is warranted — the token is "now". Persistence is deferred to the checkpoint commit (a clean cycle), not eager.
+2. **No checkpoint** (genuine first sync, an empty/missing store, or after a rescan / state clear): `fullScan()` clears the cache, fetches a fresh changes start token BEFORE listing (so changes that land during the scan are not missed), runs `listAllFiles()` recursively with **adaptive** concurrency (an `AdaptivePool` starting at 3, ramping toward 8 on sustained success and halving on a rate-limit — see [Full-scan listing concurrency](#full-scan-listing-concurrency)), builds the `GoogleDriveMetadataCache` from the flat file list, and marks the FS initialized. No replay is warranted — the token is "now". Persistence is deferred to the checkpoint commit (a clean cycle), not eager.
 
 `list()` and `getChangedPaths()` apply an incremental `changes.list` only when a replay is warranted (checkpoint restored, or the FS was already initialized); a fresh full scan reports no delta. The cache is scoped to `vaultId` so a plugin reinstall (which regenerates `vaultId`) starts with a fresh cache, preventing stale entries.
 
@@ -91,7 +91,7 @@ Key methods:
 
 | Method | Description |
 |--------|-------------|
-| `listAllFiles(rootId)` | Recursive listing with `AsyncPool(3)` concurrency |
+| `listAllFiles(rootId)` | Recursive listing with **adaptive** concurrency (`AdaptivePool`, start 3 / max 8) + per-page rate-limit retry — see [Full-scan listing concurrency](#full-scan-listing-concurrency) |
 | `uploadFile(...)` | Multipart upload for files <= 5 MB, delegates to `ResumableUploader` for larger files |
 | `downloadFile(fileId)` | `GET /files/{id}?alt=media` |
 | `getChangesStartToken()` | `GET /changes/startPageToken` |
@@ -99,6 +99,10 @@ Key methods:
 | `deleteFile(fileId)` | Soft delete (trash) by default, permanent delete optional |
 | `findChildByName(parentId, name, mimeType?)` | Query `'<parent>' in parents and name = '<escaped name>' and trashed = false` (plus optional `mimeType`), `pageSize` 1; returns the first match or null. Both parent ID and name are backslash/quote-escaped. Dedupes folder creation against Google Drive's same-name-folder behavior |
 | `updateFileMetadata(...)` | PATCH for rename/move with `addParents`/`removeParents` |
+
+### Full-scan listing concurrency
+
+`listAllFiles()` is the cold/initial enumeration: it walks the folder tree one `files.list` per folder (the `drive.file` scope can't flat-list the whole drive), reached only on a first sync / rescan / 410 cursor-expiry full-scan — never on the steady-state hot/warm delta path. It runs on an **`AdaptivePool`** (AIMD): it starts at concurrency **3** (the historical fixed value ⇒ no change at t=0), ramps **+1 every 8** cleanly-listed folders up to **8**, and **halves** (floor 1) on a rate-limit. Each page (`listFiles`) is wrapped in a bounded retry (`MAX_LIST_RETRIES = 3`) via `classifyGoogleDriveError` + `decideRetry`/`sleep`: a `rateLimit` (incl. Google's 403-means-rate-limit) or `transient` error is retried honoring `Retry-After`, and on a rate-limit the pool is signalled (`noteRateLimit`) **before** the backoff sleep so its ceiling drops immediately while the task holds its slot (a natural throttle). `auth`/`permission`/`notFound` propagate, failing the scan exactly as before. This lets a folder-heavy vault's initial enumeration discover the sustainable rate instead of a fixed 3. The retry's `sleep`/`rng` are injectable on the client constructor for fast deterministic tests. (Mirrors the sync engine's transfer-phase `AdaptivePool` + `withIoRetry`; the AIMD primitive is shared in `queue/`.)
 
 ### Transport-level 401 retry
 
