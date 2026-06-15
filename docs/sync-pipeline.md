@@ -6,7 +6,7 @@ Each sync cycle runs a 4-phase pipeline:
 
 1. **Collect** -- `collectChanges()` gathers `MixedEntity[]` using the appropriate temperature mode
 2. **Decide** -- `planSync()` maps each `MixedEntity` to a `SyncAction`
-3. **Execute** -- `executePlan()` runs I/O in grouped batches (A/B/C/D)
+3. **Execute** -- `executePlan()` runs I/O in lane/tier phases (transfers → conflicts → structural; see [Execution phases](#execution-phases-lanetier-scheduling))
 4. **Commit** -- `commitAction()` persists each successful action's `SyncRecord` to IndexedDB
 
 The orchestrator (`SyncOrchestrator.executeSyncOnce()`) drives this pipeline, applying scope filtering and mobile size limits between Collect and Decide.
