@@ -2,21 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import { executePlan, toConflictRecords } from "./plan-executor";
 import type { ExecutionContext, ResolvedConflict } from "./plan-executor";
 import type { SyncAction, SyncPlan } from "./types";
-import { createMockFs, createMockStateStore, addFile, readText } from "../__mocks__/sync-test-helpers";
+import { createMockFs, createMockStateStore, addFile, readText, deferred, flush } from "../__mocks__/sync-test-helpers";
 import type { SyncStateStore } from "./state";
 import { AuthError } from "../fs/errors";
-
-/** A promise resolvable from outside (mirrors async-queue.test.ts). */
-function deferred<T = void>() {
-	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((r) => { resolve = r; });
-	return { promise, resolve };
-}
-
-/** Flush pending microtasks + one macrotask so scheduled phases advance. */
-function flush(): Promise<void> {
-	return new Promise((r) => setTimeout(r, 0));
-}
 
 function makeCtx(
 	overrides: Partial<ExecutionContext> = {},
