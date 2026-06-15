@@ -142,6 +142,14 @@ export const MOBILE_TRANSFER_POOL: AdaptivePoolOpts = { min: 1, start: 2, max: 3
 const DELETE_CONCURRENCY = 5;
 
 /**
+ * Max concurrent state-only commits (match/cleanup) in Phase 1. They issue no
+ * network I/O, but a `match` commit may read the file to store a 3-way-merge base
+ * (`maybeStoreMergeBase`), so a cold scan's thousands of matches must not all read
+ * at once — the old Group A bounded these at 5 via `AsyncPool`.
+ */
+const STATE_COMMIT_CONCURRENCY = 5;
+
+/**
  * Execute a plan in three phases separated by barriers, scheduled by (lane, tier):
  *
  *   Phase 1  transfers (push/pull) pooled + state-only (match/cleanup) inline
@@ -198,10 +206,13 @@ export async function executePlan(
 		ctx.onProgress?.(completed, total);
 	};
 
-	// ── Phase 1 — transfers (pooled) + state-only (inline). ──
+	// ── Phase 1 — transfers (adaptive pool) + state-only (bounded pool). ──
 	// One action per path ⇒ concurrent transfers target disjoint paths. State-only
-	// actions do no I/O, so they don't take a pool slot — they're awaited alongside.
+	// actions (match/cleanup) issue no network I/O, but their commit can read a file
+	// to store a 3-way-merge base, so they run through their own bounded pool rather
+	// than all at once (a cold scan can emit thousands of matches).
 	const transferPool = new AdaptivePool(ctx.transferPool ?? DESKTOP_TRANSFER_POOL);
+	const statePool = new AsyncPool(STATE_COMMIT_CONCURRENCY);
 	await Promise.all([
 		...transfers.map((action) =>
 			transferPool.run(() =>
@@ -209,7 +220,7 @@ export async function executePlan(
 			)
 		),
 		...stateOnly.map((action) =>
-			executeAction(action, ctx, result, reportProgress)
+			statePool.run(() => executeAction(action, ctx, result, reportProgress))
 		),
 	]);
 
@@ -283,11 +294,15 @@ async function executeAction(
 	onRateLimit?: () => void,
 ): Promise<void> {
 	try {
-		const { localEntity, remoteEntity } = await withIoRetry(
-			() => runActionIO(action, ctx),
-			ctx,
-			onRateLimit,
-		);
+		// Retry only operations that replay safely: push/pull overwrite by path and
+		// delete is idempotent on our backends. A rename would, on replay, re-issue
+		// rename(oldPath, …) against a source the first (successful) attempt already
+		// moved → a spurious not-found failure — so renames run without the retry wrapper.
+		const io = () => runActionIO(action, ctx);
+		const { localEntity, remoteEntity } =
+			ACTION_CLASS[action.action].tier === "rename"
+				? await io()
+				: await withIoRetry(io, ctx, onRateLimit);
 		await commitAction(action, localEntity, remoteEntity, ctx.committer);
 		result.succeeded.push({ action, localEntity, remoteEntity });
 	} catch (err) {
@@ -388,12 +403,12 @@ async function executeConflictAction(
 			logger: ctx.logger,
 		};
 
-		// Conflict gets in-cycle retry too (a 429 mid-resolve should retry), but is NOT
-		// wired to the transfer pool's AIMD — it runs in its own serial phase.
-		const resolution = await withIoRetry(
-			() => resolveConflict(conflictCtx, ctx.conflictStrategy),
-			ctx,
-		);
+		// No in-cycle retry: conflict resolution (the `duplicate` strategy) is NOT
+		// idempotent on replay — after a partial write, generateConflictPath would pick
+		// a fresh `.conflict-N` name, orphaning the first backup. A rate-limited resolve
+		// fails the action and re-resolves next cycle (it runs serially and never feeds
+		// the transfer pool's AIMD).
+		const resolution = await resolveConflict(conflictCtx, ctx.conflictStrategy);
 
 		const localEntity = await ctx.localFs.stat(action.path) ?? action.local;
 		const remoteEntity = await ctx.remoteFs.stat(action.path) ?? action.remote;

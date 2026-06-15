@@ -91,6 +91,13 @@ export function classifyHttpError(err: unknown): ErrorClassification {
 }
 
 /**
+ * Upper bound on any single retry backoff (ms). A server (or a clock skewed
+ * backwards) can emit a huge `Retry-After`; without a cap one retry could sleep for
+ * hours and hang the sync. Matches the per-backend client cap (`MAX_RATE_LIMIT_DELAY_MS`).
+ */
+const MAX_RETRY_DELAY_MS = 64_000;
+
+/**
  * What the retry loop should do with a classified error. Pure data so the policy
  * can be unit-tested in isolation (with an injected rng for the jitter).
  *
@@ -125,10 +132,10 @@ export function decideRetry(
 	if (classification.kind === "notFound") return { action: "stop" };
 	if (attempt >= maxRetries) return { action: "exhausted" };
 
-	const delayMs = classification.retryAfterMs != null
+	const rawDelay = classification.retryAfterMs != null
 		? classification.retryAfterMs
 		: Math.pow(2, attempt - 1) * 1000 * (0.5 + rng());
-	return { action: "retry", delayMs };
+	return { action: "retry", delayMs: Math.min(rawDelay, MAX_RETRY_DELAY_MS) };
 }
 
 export function sleep(ms: number): Promise<void> {

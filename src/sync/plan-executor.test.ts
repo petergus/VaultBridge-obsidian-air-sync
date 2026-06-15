@@ -868,17 +868,14 @@ describe("withIoRetry (per-action in-cycle retry)", () => {
 		expect(order[1]).toMatch(/^sleep:/);
 	});
 
-	it("retries a rate-limited conflict but does NOT signal the transfer pool (D1)", async () => {
+	it("does NOT retry a rate-limited conflict (not idempotent) and never signals the transfer pool (D1)", async () => {
 		const noteSpy = vi.spyOn(AdaptivePool.prototype, "noteRateLimit");
 		const ctx = makeCtx({ conflictStrategy: "duplicate" });
 		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
 		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
 		addFile(localFs, "g.md", "local version");
 		addFile(remoteFs, "g.md", "remote version");
-		const orig = remoteFs.read.bind(remoteFs);
-		let n = 0;
-		vi.spyOn(remoteFs, "read").mockImplementation((p) =>
-			n++ === 0 ? Promise.reject(httpErr(429)) : orig(p));
+		const readSpy = vi.spyOn(remoteFs, "read").mockRejectedValue(httpErr(429));
 
 		const result = await executePlan(makePlan([{
 			path: "g.md",
@@ -887,9 +884,31 @@ describe("withIoRetry (per-action in-cycle retry)", () => {
 			remote: { path: "g.md", isDirectory: false, size: 14, mtime: 1500, hash: "r" },
 		}]), ctx);
 
-		expect(result.conflicts).toHaveLength(1);
-		expect(result.failed).toHaveLength(0);
+		// Conflict resolution is not idempotent on replay (a partial .conflict write would
+		// be orphaned by generateConflictPath on retry), so it is NOT wrapped in withIoRetry:
+		// a rate-limit fails the action (re-resolved next cycle) rather than retrying mid-resolve.
+		expect(result.conflicts).toHaveLength(0);
+		expect(result.failed).toHaveLength(1);
+		expect(readSpy).toHaveBeenCalledTimes(1); // not retried
 		expect(noteSpy).not.toHaveBeenCalled(); // conflict is serial; it never feeds the transfer pool
+	});
+
+	it("does NOT retry a rename (not idempotent on replay)", async () => {
+		const ctx = makeCtx();
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		const renameSpy = vi.spyOn(remoteFs, "rename").mockRejectedValue(httpErr(429));
+
+		const result = await executePlan(makePlan([{
+			path: "new.md",
+			action: "rename_remote",
+			oldPath: "old.md",
+			local: { path: "new.md", isDirectory: false, size: 5, mtime: 1000, hash: "h" },
+		}]), ctx);
+
+		// rename tier is excluded from withIoRetry: re-running rename(oldPath, …) would hit a
+		// source the first (successful) attempt already moved → a spurious failure.
+		expect(result.failed).toHaveLength(1);
+		expect(renameSpy).toHaveBeenCalledTimes(1);
 	});
 });
 
