@@ -6,8 +6,11 @@ import type { ConflictResolverContext, ConflictResolutionResult } from "./confli
 import type { Logger } from "../logging/logger";
 import { commitAction } from "./state-committer";
 import { resolveConflict } from "./conflict-resolver";
-import { AuthError } from "../fs/errors";
-import { AsyncPool } from "../queue/async-queue";
+import { AuthError, classifyHttpError } from "../fs/errors";
+import type { ErrorClassification } from "../fs/errors";
+import { AsyncPool, AdaptivePool } from "../queue/async-queue";
+import type { AdaptivePoolOpts } from "../queue/async-queue";
+import { decideRetry, sleep } from "./error";
 
 export interface CompletedAction {
 	action: SyncAction;
@@ -66,6 +69,21 @@ export interface ExecutionContext {
 	conflictStrategy: ConflictStrategy;
 	onProgress?: (completed: number, total: number) => void;
 	logger?: Logger;
+	/**
+	 * Classify a failed I/O for the per-action retry — the backend's own override
+	 * (e.g. Google's 403-means-rate-limit) when present, else the generic HTTP
+	 * classifier. Set by the orchestrator; defaults to `classifyHttpError`.
+	 */
+	classifyError?: (err: unknown) => ErrorClassification;
+	/**
+	 * AIMD bounds for the transfer-phase pool (platform-aware; set by the
+	 * orchestrator). Defaults to `DESKTOP_TRANSFER_POOL`.
+	 */
+	transferPool?: AdaptivePoolOpts;
+	/** Test seam: random source for retry backoff jitter (default `Math.random`). */
+	rng?: () => number;
+	/** Test seam: backoff sleep (default the real `sleep` from `./error`). */
+	sleep?: (ms: number) => Promise<void>;
 }
 
 type Lane = "remote" | "local" | "both" | "none";
@@ -98,8 +116,23 @@ const ACTION_CLASS: Record<SyncActionType, { lane: Lane; tier: Tier }> = {
 	delete_local: { lane: "local", tier: "delete" },
 };
 
-/** Max concurrent content transfers (push/pull) — bandwidth / rate-limit bound. */
-const TRANSFER_CONCURRENCY = 5;
+/**
+ * Per-action I/O retry attempts for transient / rate-limit errors. DISTINCT from
+ * the orchestrator's cycle-level `MAX_RETRIES`: this retries one action's I/O
+ * in-cycle so a 429/5xx doesn't defer the file to the next (forced-cold) cycle. An
+ * exhausted retry lands the action in `result.failed` (a return, not a throw), so
+ * it never multiplies with the cycle-level retry. Worst case: 3 I/O attempts.
+ */
+const MAX_ACTION_RETRIES = 3;
+/**
+ * AIMD transfer-pool presets, selected by the orchestrator per platform. `start`
+ * is today's fixed value (5) on desktop ⇒ zero behaviour change at t=0; it ramps
+ * toward `max` on sustained success and halves toward `min` on a rate-limit. Mobile
+ * stays low: each transfer holds a whole-file `ArrayBuffer` in memory (mobile also
+ * pre-filters files over `mobileMaxFileSizeMB`).
+ */
+export const DESKTOP_TRANSFER_POOL: AdaptivePoolOpts = { min: 2, start: 5, max: 10, rampAfter: 8 };
+export const MOBILE_TRANSFER_POOL: AdaptivePoolOpts = { min: 1, start: 2, max: 3, rampAfter: 8 };
 /**
  * Max concurrent deletes, per lane. Deletes are metadata-only (trash / delete by
  * id) and could run hotter, but they share the backend rate-limit budget, so kept
@@ -168,10 +201,12 @@ export async function executePlan(
 	// ── Phase 1 — transfers (pooled) + state-only (inline). ──
 	// One action per path ⇒ concurrent transfers target disjoint paths. State-only
 	// actions do no I/O, so they don't take a pool slot — they're awaited alongside.
-	const transferPool = new AsyncPool(TRANSFER_CONCURRENCY);
+	const transferPool = new AdaptivePool(ctx.transferPool ?? DESKTOP_TRANSFER_POOL);
 	await Promise.all([
 		...transfers.map((action) =>
-			transferPool.run(() => executeAction(action, ctx, result, reportProgress))
+			transferPool.run(() =>
+				executeAction(action, ctx, result, reportProgress, () => transferPool.noteRateLimit())
+			)
 		),
 		...stateOnly.map((action) =>
 			executeAction(action, ctx, result, reportProgress)
@@ -209,14 +244,50 @@ export async function executePlan(
 	return result;
 }
 
+/**
+ * Run an action's network I/O with bounded in-cycle retry for transient /
+ * rate-limit errors. `AuthError` is rethrown immediately — the ONLY cycle-abort
+ * path, unchanged. Any other non-retryable classification rethrows the ORIGINAL
+ * error so the caller's catch records it in `result.failed` (preserving today's
+ * semantics: e.g. a permission-403 fails the action, it does NOT abort the cycle).
+ * On a rate-limit, `onRateLimit` fires BEFORE the backoff sleep so an adaptive pool
+ * can shrink immediately.
+ */
+async function withIoRetry<T>(
+	io: () => Promise<T>,
+	ctx: ExecutionContext,
+	onRateLimit?: () => void,
+): Promise<T> {
+	const rng = ctx.rng ?? Math.random;
+	const doSleep = ctx.sleep ?? sleep;
+	const classify = ctx.classifyError ?? classifyHttpError;
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return await io();
+		} catch (err) {
+			if (err instanceof AuthError) throw err;
+			const classification = classify(err);
+			const decision = decideRetry(classification, attempt, MAX_ACTION_RETRIES, rng);
+			if (decision.action !== "retry") throw err;
+			if (classification.kind === "rateLimit") onRateLimit?.();
+			await doSleep(decision.delayMs);
+		}
+	}
+}
+
 async function executeAction(
 	action: SyncAction,
 	ctx: ExecutionContext,
 	result: ExecutionResult,
 	reportProgress: () => void,
+	onRateLimit?: () => void,
 ): Promise<void> {
 	try {
-		const { localEntity, remoteEntity } = await runActionIO(action, ctx);
+		const { localEntity, remoteEntity } = await withIoRetry(
+			() => runActionIO(action, ctx),
+			ctx,
+			onRateLimit,
+		);
 		await commitAction(action, localEntity, remoteEntity, ctx.committer);
 		result.succeeded.push({ action, localEntity, remoteEntity });
 	} catch (err) {
@@ -317,7 +388,12 @@ async function executeConflictAction(
 			logger: ctx.logger,
 		};
 
-		const resolution = await resolveConflict(conflictCtx, ctx.conflictStrategy);
+		// Conflict gets in-cycle retry too (a 429 mid-resolve should retry), but is NOT
+		// wired to the transfer pool's AIMD — it runs in its own serial phase.
+		const resolution = await withIoRetry(
+			() => resolveConflict(conflictCtx, ctx.conflictStrategy),
+			ctx,
+		);
 
 		const localEntity = await ctx.localFs.stat(action.path) ?? action.local;
 		const remoteEntity = await ctx.remoteFs.stat(action.path) ?? action.remote;

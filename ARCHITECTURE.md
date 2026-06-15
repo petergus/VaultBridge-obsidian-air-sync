@@ -28,7 +28,7 @@ One row per directory; see the layer diagram and per-doc references for module d
 | `ui/` | Settings UI: the main settings tab, the backend-connection section, and Google Drive / Dropbox / OneDrive-specific settings and folder-pick modals. |
 | `store/` | IndexedDB plumbing: the `IDBHelper` transaction wrapper, the generic `MetadataStore<T>` file-metadata cache, and `content-codec` (deflate compression for stored 3-way merge base content). |
 | `logging/` | `Logger` — structured log writer (`.airsync/logs/`). |
-| `queue/` | Concurrency primitives: `AsyncPool` (bounded concurrency) and `AsyncMutex`. |
+| `queue/` | Concurrency primitives: `AsyncPool` (fixed bounded concurrency), `AdaptivePool` (AIMD concurrency for the transfer phase — ramps on success, halves on a rate-limit), and `AsyncMutex`. |
 | `utils/` | Helpers: `sha256()` / `md5()` hashing, the QuickXorHash implementation (`quickxor.ts`) for OneDrive, path utilities (`getFileExtension`, etc.), gitignore-style `isIgnored()` pattern matching, and line parsing (`parse-lines.ts`). |
 
 ## Layer architecture
@@ -71,7 +71,7 @@ One row per directory; see the layer diagram and per-doc references for module d
      │        │                           │
      │        ▼                           │
      │  executePlan()  (3 phases)         │  PlanExecutor
-     │    1 transfers: push/pull          │    AsyncPool(5); match/cleanup inline
+     │    1 transfers: push/pull          │    AdaptivePool (AIMD); match/cleanup inline
      │    2 conflict (serial)             │    own phase (sibling-path safe)
      │    3 structural: 2 lanes ||        │    remote & local, concurrent
      │      per lane: rename then del     │    rename serial; delete pooled

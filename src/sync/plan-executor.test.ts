@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
-import { executePlan, toConflictRecords } from "./plan-executor";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { executePlan, toConflictRecords, DESKTOP_TRANSFER_POOL, MOBILE_TRANSFER_POOL } from "./plan-executor";
 import type { ExecutionContext, ResolvedConflict } from "./plan-executor";
 import type { SyncAction, SyncPlan } from "./types";
 import { createMockFs, createMockStateStore, addFile, readText, deferred, flush } from "../__mocks__/sync-test-helpers";
 import type { SyncStateStore } from "./state";
-import { AuthError } from "../fs/errors";
+import { AuthError, classifyHttpError } from "../fs/errors";
+import { AdaptivePool } from "../queue/async-queue";
 
 function makeCtx(
 	overrides: Partial<ExecutionContext> = {},
@@ -19,6 +20,11 @@ function makeCtx(
 			stateStore: stateStore as unknown as SyncStateStore,
 		},
 		conflictStrategy: "auto_merge",
+		classifyError: classifyHttpError,
+		transferPool: DESKTOP_TRANSFER_POOL,
+		// Test seams: instant sleep + deterministic jitter so retry tests don't burn time.
+		sleep: () => Promise.resolve(),
+		rng: () => 0,
 		...overrides,
 	};
 }
@@ -26,6 +32,10 @@ function makeCtx(
 function makePlan(actions: SyncAction[]): SyncPlan {
 	return { actions };
 }
+
+// Some suites spy on AdaptivePool.prototype (a global) — restore after each test
+// so the spy never leaks into another (vitest is not configured to auto-restore).
+afterEach(() => vi.restoreAllMocks());
 
 describe("executePlan", () => {
 	describe("push", () => {
@@ -261,8 +271,10 @@ describe("executePlan", () => {
 			addFile(localFs, "err.md", "local version");
 			addFile(remoteFs, "err.md", "remote version");
 
-			// Force localFs.read to throw a non-Auth error to simulate conflict resolution failure
-			vi.spyOn(localFs, "read").mockRejectedValueOnce(new Error("I/O error"));
+			// Force localFs.read to ALWAYS throw a non-Auth error: conflict resolution now
+			// gets in-cycle retry, so a single transient error would be retried and succeed
+			// (see the D1 retry test). A persistent error exhausts the retries → result.failed.
+			vi.spyOn(localFs, "read").mockRejectedValue(new Error("I/O error"));
 
 			const plan = makePlan([{
 				path: "err.md",
@@ -729,6 +741,206 @@ describe("executePlan", () => {
 			expect(result.failed).toHaveLength(0);
 			expect(result.conflicts).toHaveLength(0);
 		});
+	});
+});
+
+describe("withIoRetry (per-action in-cycle retry)", () => {
+	const httpErr = (status: number) => Object.assign(new Error(`HTTP ${status}`), { status });
+	const pushPlan = (path = "x.md"): SyncPlan =>
+		makePlan([{ path, action: "push", local: { path, isDirectory: false, size: 7, mtime: 1000, hash: "" } }]);
+
+	it("retries a rate-limited (429) transfer, then succeeds", async () => {
+		const ctx = makeCtx();
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const orig = remoteFs.write.bind(remoteFs);
+		let n = 0;
+		const writeSpy = vi.spyOn(remoteFs, "write").mockImplementation((p, c, m) =>
+			n++ === 0 ? Promise.reject(httpErr(429)) : orig(p, c, m));
+
+		const result = await executePlan(pushPlan(), ctx);
+
+		expect(result.succeeded).toHaveLength(1);
+		expect(result.failed).toHaveLength(0);
+		expect(writeSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries a transient (503) transfer, then succeeds", async () => {
+		const ctx = makeCtx();
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const orig = remoteFs.write.bind(remoteFs);
+		let n = 0;
+		const writeSpy = vi.spyOn(remoteFs, "write").mockImplementation((p, c, m) =>
+			n++ === 0 ? Promise.reject(httpErr(503)) : orig(p, c, m));
+
+		const result = await executePlan(pushPlan(), ctx);
+
+		expect(result.succeeded).toHaveLength(1);
+		expect(writeSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("does NOT retry a permission (403) error — records failed, does not abort the cycle", async () => {
+		const ctx = makeCtx();
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const writeSpy = vi.spyOn(remoteFs, "write").mockRejectedValue(httpErr(403));
+
+		const result = await executePlan(pushPlan(), ctx); // resolves (no abort)
+
+		expect(result.failed).toHaveLength(1);
+		expect(result.succeeded).toHaveLength(0);
+		expect(writeSpy).toHaveBeenCalledTimes(1); // not retried
+	});
+
+	it("does NOT retry a notFound (404) error", async () => {
+		const ctx = makeCtx();
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const writeSpy = vi.spyOn(remoteFs, "write").mockRejectedValue(httpErr(404));
+
+		const result = await executePlan(pushPlan(), ctx);
+
+		expect(result.failed).toHaveLength(1);
+		expect(writeSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("aborts (no retry) on AuthError", async () => {
+		const ctx = makeCtx();
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const writeSpy = vi.spyOn(remoteFs, "write").mockRejectedValue(new AuthError("unauthorized", 401));
+
+		await expect(executePlan(pushPlan(), ctx)).rejects.toThrow(AuthError);
+		expect(writeSpy).toHaveBeenCalledTimes(1); // AuthError is rethrown immediately
+	});
+
+	it("gives up after MAX_ACTION_RETRIES (3) → failed, without a cycle abort", async () => {
+		const ctx = makeCtx();
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const writeSpy = vi.spyOn(remoteFs, "write").mockRejectedValue(httpErr(429));
+
+		const result = await executePlan(pushPlan(), ctx); // resolves (no throw → no cycle retry)
+
+		expect(writeSpy).toHaveBeenCalledTimes(3);
+		expect(result.failed).toHaveLength(1);
+	});
+
+	it("uses ctx.classifyError (Google 403 = rate-limit), so a 403 retries", async () => {
+		const ctx = makeCtx({ classifyError: () => ({ kind: "rateLimit", retryAfterMs: 1 }) });
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const orig = remoteFs.write.bind(remoteFs);
+		let n = 0;
+		const writeSpy = vi.spyOn(remoteFs, "write").mockImplementation((p, c, m) =>
+			n++ === 0 ? Promise.reject(httpErr(403)) : orig(p, c, m));
+
+		const result = await executePlan(pushPlan(), ctx);
+
+		expect(result.succeeded).toHaveLength(1); // retried — proves ctx.classifyError is used
+		expect(writeSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("signals the transfer pool (noteRateLimit) BEFORE sleeping, on a 429", async () => {
+		const order: string[] = [];
+		const noteSpy = vi.spyOn(AdaptivePool.prototype, "noteRateLimit").mockImplementation(() => { order.push("noteRateLimit"); });
+		const ctx = makeCtx({ sleep: (ms) => { order.push(`sleep:${ms}`); return Promise.resolve(); } });
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "x.md", "content");
+		const orig = remoteFs.write.bind(remoteFs);
+		let n = 0;
+		vi.spyOn(remoteFs, "write").mockImplementation((p, c, m) =>
+			n++ === 0 ? Promise.reject(httpErr(429)) : orig(p, c, m));
+
+		await executePlan(pushPlan(), ctx);
+
+		expect(noteSpy).toHaveBeenCalledTimes(1);
+		expect(order[0]).toBe("noteRateLimit");
+		expect(order[1]).toMatch(/^sleep:/);
+	});
+
+	it("retries a rate-limited conflict but does NOT signal the transfer pool (D1)", async () => {
+		const noteSpy = vi.spyOn(AdaptivePool.prototype, "noteRateLimit");
+		const ctx = makeCtx({ conflictStrategy: "duplicate" });
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		addFile(localFs, "g.md", "local version");
+		addFile(remoteFs, "g.md", "remote version");
+		const orig = remoteFs.read.bind(remoteFs);
+		let n = 0;
+		vi.spyOn(remoteFs, "read").mockImplementation((p) =>
+			n++ === 0 ? Promise.reject(httpErr(429)) : orig(p));
+
+		const result = await executePlan(makePlan([{
+			path: "g.md",
+			action: "conflict",
+			local: { path: "g.md", isDirectory: false, size: 13, mtime: 2000, hash: "l" },
+			remote: { path: "g.md", isDirectory: false, size: 14, mtime: 1500, hash: "r" },
+		}]), ctx);
+
+		expect(result.conflicts).toHaveLength(1);
+		expect(result.failed).toHaveLength(0);
+		expect(noteSpy).not.toHaveBeenCalled(); // conflict is serial; it never feeds the transfer pool
+	});
+});
+
+describe("adaptive transfer pool (Phase 1)", () => {
+	function gatedWrites(remoteFs: ReturnType<typeof createMockFs>) {
+		const gate = deferred();
+		let running = 0;
+		const counter = { max: 0 };
+		const orig = remoteFs.write.bind(remoteFs);
+		vi.spyOn(remoteFs, "write").mockImplementation(async (p, c, m) => {
+			running++;
+			counter.max = Math.max(counter.max, running);
+			await gate.promise;
+			running--;
+			return orig(p, c, m);
+		});
+		return { gate, counter };
+	}
+
+	function manyPushes(n: number, ctx: ExecutionContext): SyncPlan {
+		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+		const actions: SyncAction[] = [];
+		for (let i = 0; i < n; i++) {
+			addFile(localFs, `f${i}.md`, "content");
+			actions.push({ path: `f${i}.md`, action: "push", local: { path: `f${i}.md`, isDirectory: false, size: 7, mtime: 1000, hash: "" } });
+		}
+		return makePlan(actions);
+	}
+
+	it("starts transfers at the desktop pool's start concurrency (5)", async () => {
+		const ctx = makeCtx(); // DESKTOP_TRANSFER_POOL (start 5)
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		const { gate, counter } = gatedWrites(remoteFs);
+
+		const p = executePlan(manyPushes(8, ctx), ctx);
+		await flush();
+		expect(counter.max).toBe(5);
+		gate.resolve();
+		await p;
+	});
+
+	it("caps mobile transfers at the mobile pool's start concurrency (2)", async () => {
+		const ctx = makeCtx({ transferPool: MOBILE_TRANSFER_POOL });
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		const { gate, counter } = gatedWrites(remoteFs);
+
+		const p = executePlan(manyPushes(8, ctx), ctx);
+		await flush();
+		expect(counter.max).toBe(2);
+		gate.resolve();
+		await p;
 	});
 });
 

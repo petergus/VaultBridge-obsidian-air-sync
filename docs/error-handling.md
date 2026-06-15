@@ -28,7 +28,16 @@ This distinction is important because 403 rate limits should be retried, while 4
 - **Backoff**: exponential with jitter -- `2^(attempt-1) * 1000 * (0.5 + random())` ms
 - **Rate-limit override**: a non-rate-limit 403 has already aborted earlier; among surviving errors, if `status` is 429 or 403 and `retryAfter !== null`, the delay is `retryAfter * 1000` ms instead of computed backoff
 
-Only a *thrown* error from `executeSyncOnce()` triggers a retry. Per-file failures are caught inside `executePlan` (in `executeAction`/`executeConflictAction`) and recorded in `result.failed` without throwing, so they never cause a retry — a sync with failed actions returns a normal result reported as `"partial_error"`. The only error that propagates out of action execution is `AuthError` (re-thrown to abort the whole sync). Errors thrown *outside* per-action try/catch — change detection (`collectChanges`), planning (`planSync`/`refinePlan`), or `saveSettings` — do reach the retry loop.
+Only a *thrown* error from `executeSyncOnce()` triggers a *cycle-level* retry. Per-file failures are caught inside `executePlan` (in `executeAction`/`executeConflictAction`) and recorded in `result.failed` without throwing, so they never cause a cycle-level retry — a sync with failed actions returns a normal result reported as `"partial_error"`. The only error that propagates out of action execution is `AuthError` (re-thrown to abort the whole sync). Errors thrown *outside* per-action try/catch — change detection (`collectChanges`), planning (`planSync`/`refinePlan`), or `saveSettings` — do reach the retry loop.
+
+### Two retry layers
+
+There are **two independent retry layers** (they do not multiply):
+
+1. **Per-action, in-cycle** (`withIoRetry`, `plan-executor.ts`): each action's network I/O is retried up to `MAX_ACTION_RETRIES = 3` for `rateLimit`/`transient` classifications, honoring `Retry-After` (else the same jittered backoff). It classifies via `ctx.classifyError` — the backend's own override (e.g. Google's 403-means-rate-limit) when present, else `classifyHttpError`. `AuthError` is rethrown immediately (the only cycle-abort path); `permission`/`notFound` are not retried. An exhausted retry rethrows the *original* error so the per-action catch records it in `result.failed` — a *return*, never a throw, so it does **not** reach the cycle-level loop. On a `rateLimit`, the transfer phase's `AdaptivePool` is signalled (`noteRateLimit`) before the backoff sleep so its concurrency ceiling halves immediately. Net effect: a transient 429 no longer defers a file to the next (forced-cold) cycle, so cycles complete clean more often (a clean cycle commits the checkpoint and avoids a repeated cold reconcile).
+2. **Cycle-level** (`MAX_RETRIES = 3`, above): only a *thrown* error (effectively `AuthError`, or an error outside per-action try/catch) re-runs the whole cycle.
+
+Worst case for a single action is `MAX_ACTION_RETRIES` (3) I/O attempts; it never compounds with `MAX_RETRIES`.
 
 ### Non-retryable errors
 
@@ -81,7 +90,7 @@ try {
 }
 ```
 
-Execution runs in three phases (lane/tier scheduling — see [sync-pipeline.md](sync-pipeline.md)). Phase 1 runs transfers (`push`, `pull`) concurrently, bounded to 5 in-flight via `AsyncPool(TRANSFER_CONCURRENCY = 5)`, with the state-only `match`/`cleanup` run inline; Phase 2 runs `conflict` serially in its own phase via `executeConflictAction`; Phase 3 runs the remote and local structural lanes concurrently, each doing its renames serially then its deletes pooled (`AsyncPool(DELETE_CONCURRENCY = 5)`). Both `executeAction` and `executeConflictAction` apply the same per-action isolation: each action is wrapped in its own try/catch that re-throws only `AuthError` (aborting the whole sync) and records every other error in `result.failed` so remaining actions continue.
+Execution runs in three phases (lane/tier scheduling — see [sync-pipeline.md](sync-pipeline.md)). Phase 1 runs transfers (`push`, `pull`) concurrently via an `AdaptivePool` (AIMD: desktop start 5 / max 10, mobile start 2 / max 3; +1 every 8 clean runs, halve on a rate-limit), with the state-only `match`/`cleanup` run inline; Phase 2 runs `conflict` serially in its own phase via `executeConflictAction`; Phase 3 runs the remote and local structural lanes concurrently, each doing its renames serially then its deletes pooled (`AsyncPool(DELETE_CONCURRENCY = 5)`). Both `executeAction` and `executeConflictAction` apply the same per-action isolation (and the per-action `withIoRetry` above): each action is wrapped in its own try/catch that re-throws only `AuthError` (aborting the whole sync) and records every other error in `result.failed` so remaining actions continue.
 
 ## Acknowledge pattern
 
