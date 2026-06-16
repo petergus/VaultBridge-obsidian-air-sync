@@ -13,7 +13,7 @@ Works on desktop and mobile, powered by your own cloud storage:
 - **Syncs itself**: Your vault stays current on every device — no button to press.
 - **Survives interruptions**: Close Obsidian or lock your phone mid-sync; it picks up where it left off.
 - **Quick on big vaults**: Only what changed moves — easy on data and battery.
-- **Two-device edits, combined**: Edits from two devices come together when they can — no messy "conflicted copy" files.
+- **Two-device edits, merged**: Edits from two devices come together when they can — no messy "conflicted copy" files.
 - **Set up in a minute**: Connect once; almost nothing to configure.
 - **Choose what syncs**: Skip big attachments or a private folder.
 
