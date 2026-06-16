@@ -202,11 +202,13 @@ export default tseslint.config(
 		},
 	},
 	{
-		// Principle #7 (single responsibility per module): cap production module
-		// size. Target 200-300 lines; this is the hard ceiling, counting code
-		// lines only (comments/blanks excluded, since they don't add complexity).
-		// Split when exceeded. Tests/mocks/test-helpers are exempt — they are
-		// naturally longer and are not shipped.
+		// Principle #7 (single responsibility per module). This cap is a PROMPT to
+		// consider a responsibility split, not a line-count target to minimize
+		// against — counting code lines only (comments/blanks excluded). When a file
+		// trips it: split a concept out if that's natural; if not (cohesive lines, or
+		// the split is its own task), add a files-scoped override below pinned at the
+		// file's size with a justifying comment. Do NOT contort code to shave lines.
+		// Tests/mocks/test-helpers are exempt — naturally longer, and not shipped.
 		files: ["src/**/*.ts"],
 		ignores: ["src/**/*.test.ts", "src/__mocks__/**", "src/**/test-helpers.ts"],
 		rules: {
@@ -214,9 +216,11 @@ export default tseslint.config(
 		},
 	},
 	{
-		// Grandfathered modules above the 300-line cap (known debt). Each is
-		// pinned at its current size so it cannot grow further without being
-		// split — ratchet these down over time; do not raise them.
+		// Per-file overrides above the 300 cap (known debt), each pinned at its
+		// current size so it cannot grow SILENTLY — the pin is a ratchet, not a
+		// reduction mandate. Ratchet down when a natural split presents itself;
+		// raise (re-pin) when a cohesive change needs it rather than forcing the
+		// count down with churn (see docs/code-enforcement.md §6).
 		// (googledrive/index.ts was here at 397; A1 lifted its cache/checkpoint
 		// machinery into fs/caching/, dropping it back under the standard 300 cap.)
 		files: ["src/fs/googledrive/auth.ts"],

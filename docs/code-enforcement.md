@@ -101,21 +101,32 @@ functions — no I/O, no clock, no randomness — so every intermediate state is
 
 ## 6. Single responsibility per module (Principle #7)
 
-Each file owns one concept; oversized files signal a missing split.
+Each file owns one concept. The `max-lines` cap is a **prompt to consider a
+responsibility split — not a line-count target to minimize against.** When a file
+trips it, the question is "does a concept want to move to its own module?", not
+"how do I shave lines off this one?".
 
 | | |
 |---|---|
-| **Prevents** | production modules over 300 code lines (comments/blanks excluded) |
+| **Prevents** | a module growing past ~300 code lines (comments/blanks excluded) *silently*, without anyone asking whether it should split |
 | **Where** | `max-lines` in `eslint.config.mts` |
 | **How** | `max-lines` (error) on `src/**/*.ts`; tests, mocks, and `test-helpers.ts` are exempt |
-| **Exception** | Split the module. Do **not** raise the cap |
+| **Exception** | If a clean responsibility split is natural, split. If it is not — the lines are one cohesive concern, or the split is its own task — **raise this file's threshold** with a `files`-scoped override and a justifying comment. Do **not** force the count down with churn |
 
-Two modules are grandfathered above the cap as known debt, each **pinned at its
-current size** so it cannot grow: `fs/googledrive/auth.ts` (337) and
-`sync/orchestrator.ts` (332). Ratchet these down by splitting; never raise them.
-(`fs/googledrive/index.ts` was grandfathered here at 397; ADR 0001 lifted its
-cache/checkpoint machinery into `fs/caching/`, dropping it back under the 300 cap,
-so it is no longer grandfathered.)
+**Reducing the number is never the goal; keeping each module honestly sized is.**
+So do not inline single-use locals, merge imports, or otherwise contort code purely
+to fit under the cap — that trades readability for a number, which is exactly what
+the rule is *not* asking for. When a cohesive change pushes a file over and a clean
+split isn't natural (or is its own task), add or raise a per-file override pinned at
+the new size, with a comment saying why the split was deferred. The pin is a
+ratchet: it stops *silent* growth and flags the file as split-when-convenient — it
+is not a mandate to shrink the file by force.
+
+Two modules currently carry such overrides as known debt: `fs/googledrive/auth.ts`
+(337) and `sync/orchestrator.ts` (332). Ratchet them down when a natural split presents itself.
+(`fs/googledrive/index.ts` was here at 397; ADR 0001 lifted its cache/checkpoint
+machinery into `fs/caching/`, dropping it back under 300, so it is no longer
+overridden.)
 
 ## 7. Vault-index read centralization
 

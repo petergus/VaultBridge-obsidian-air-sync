@@ -42,8 +42,10 @@ disabling a rule.**
 ## Coding conventions
 
 - TypeScript strict mode; prefer `async/await`.
-- `main.ts` handles lifecycle only; delegate logic to separate modules; split files at
-  ~200-300 lines (capped by lint — see [code-enforcement.md](docs/code-enforcement.md)).
+- `main.ts` handles lifecycle only; delegate logic to separate modules. The ~200-300
+  line lint cap is a prompt to consider a responsibility split, not a reduction target:
+  split a concept out if natural, else raise the per-file cap with a justifying comment —
+  never contort code to shave lines (see [code-enforcement.md](docs/code-enforcement.md) §6).
 - Register listeners via `this.register*` (prevent leaks).
 - Mobile compatible (`isDesktopOnly: false`) — no Node/Electron APIs (lint-enforced).
 - Minimize network calls; require explicit disclosure. Use `requestUrl()`, never `fetch`.
