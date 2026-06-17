@@ -928,12 +928,12 @@ describe("adaptive transfer pool (Phase 1)", () => {
 		return { gate, counter };
 	}
 
-	function manyPushes(n: number, ctx: ExecutionContext): SyncPlan {
+	function manyPushes(n: number, ctx: ExecutionContext, size = 7): SyncPlan {
 		const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
 		const actions: SyncAction[] = [];
 		for (let i = 0; i < n; i++) {
 			addFile(localFs, `f${i}.md`, "content");
-			actions.push({ path: `f${i}.md`, action: "push", local: { path: `f${i}.md`, isDirectory: false, size: 7, mtime: 1000, hash: "" } });
+			actions.push({ path: `f${i}.md`, action: "push", local: { path: `f${i}.md`, isDirectory: false, size, mtime: 1000, hash: "" } });
 		}
 		return makePlan(actions);
 	}
@@ -950,14 +950,43 @@ describe("adaptive transfer pool (Phase 1)", () => {
 		await p;
 	});
 
-	it("caps mobile transfers at the mobile pool's start concurrency (2)", async () => {
+	it("caps mobile transfers at the mobile pool's start concurrency (3)", async () => {
 		const ctx = makeCtx({ transferPool: MOBILE_TRANSFER_POOL });
 		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
 		const { gate, counter } = gatedWrites(remoteFs);
 
 		const p = executePlan(manyPushes(8, ctx), ctx);
 		await flush();
-		expect(counter.max).toBe(2);
+		expect(counter.max).toBe(3); // tiny files: count-bound at start 3, well under the byte budget
+		gate.resolve();
+		await p;
+	});
+
+	it("byte-bounds transfers below the count ceiling when files are large", async () => {
+		// Count would allow 10 at once, but a 30-byte budget admits only 3 of the 10-byte files.
+		const ctx = makeCtx({
+			transferPool: { min: 1, start: 10, max: 10, rampAfter: 100, byteBudget: 30 },
+		});
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		const { gate, counter } = gatedWrites(remoteFs);
+
+		const p = executePlan(manyPushes(8, ctx, 10), ctx);
+		await flush();
+		expect(counter.max).toBe(3); // 3 * 10 = 30 fits; the byte budget, not the count, binds
+		gate.resolve();
+		await p;
+	});
+
+	it("lets small files reach the count ceiling under a generous byte budget", async () => {
+		const ctx = makeCtx({
+			transferPool: { min: 1, start: 4, max: 4, rampAfter: 100, byteBudget: 48 * 1024 * 1024 },
+		});
+		const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+		const { gate, counter } = gatedWrites(remoteFs);
+
+		const p = executePlan(manyPushes(8, ctx, 7), ctx);
+		await flush();
+		expect(counter.max).toBe(4); // tiny files are count-bound, never byte-throttled
 		gate.resolve();
 		await p;
 	});

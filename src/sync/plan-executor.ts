@@ -127,12 +127,22 @@ const MAX_ACTION_RETRIES = 3;
 /**
  * AIMD transfer-pool presets, selected by the orchestrator per platform. `start`
  * is today's fixed value (5) on desktop ⇒ zero behaviour change at t=0; it ramps
- * toward `max` on sustained success and halves toward `min` on a rate-limit. Mobile
- * stays low: each transfer holds a whole-file `ArrayBuffer` in memory (mobile also
- * pre-filters files over `mobileMaxFileSizeMB`).
+ * toward `max` on sustained success and halves toward `min` on a rate-limit.
+ *
+ * Each transfer holds a whole-file `ArrayBuffer` in memory (`requestUrl` is buffered
+ * — no streaming on either platform), so a count limit alone makes peak memory scale
+ * with file COUNT. The `byteBudget` is a second admission dimension that instead caps
+ * memory by BYTES in flight: small text files run highly concurrent (count-bound)
+ * while large files self-throttle (byte-bound). This decouples the count ceiling from
+ * memory, so mobile can run wider than the old fixed 3 while peak memory stays ≈
+ * `byteBudget` regardless of file mix (mobile also pre-filters files over
+ * `mobileMaxFileSizeMB`). Desktop's budget is a generous safety cap — a burst of large
+ * files can't blow memory — with no effect on normal vaults.
  */
-export const DESKTOP_TRANSFER_POOL: AdaptivePoolOpts = { min: 2, start: 5, max: 10, rampAfter: 8 };
-export const MOBILE_TRANSFER_POOL: AdaptivePoolOpts = { min: 1, start: 2, max: 3, rampAfter: 8 };
+export const DESKTOP_TRANSFER_POOL: AdaptivePoolOpts =
+	{ min: 2, start: 5, max: 10, rampAfter: 8, byteBudget: 128 * 1024 * 1024 };
+export const MOBILE_TRANSFER_POOL: AdaptivePoolOpts =
+	{ min: 1, start: 3, max: 8, rampAfter: 8, byteBudget: 48 * 1024 * 1024 };
 /**
  * Max concurrent deletes, per lane. Deletes are metadata-only (trash / delete by
  * id) and could run hotter, but they share the backend rate-limit budget, so kept
@@ -148,6 +158,16 @@ const DELETE_CONCURRENCY = 5;
  * at once — the old Group A bounded these at 5 via `AsyncPool`.
  */
 const STATE_COMMIT_CONCURRENCY = 5;
+
+/**
+ * Declared byte size of a transfer action, for the transfer pool's byte budget. The
+ * `transfers` bucket holds only push/pull (conflict has its own serial phase), so the
+ * source entity is local for a push and remote for a pull. Falls back to 0 (count-gated
+ * only) if the size is unknown — the budget is a soft memory ceiling, not exact.
+ */
+function transferSize(action: SyncAction): number {
+	return (action.action === "push" ? action.local?.size : action.remote?.size) ?? 0;
+}
 
 /**
  * Execute a plan in three phases separated by barriers, scheduled by (lane, tier):
@@ -215,8 +235,12 @@ export async function executePlan(
 	const statePool = new AsyncPool(STATE_COMMIT_CONCURRENCY);
 	await Promise.all([
 		...transfers.map((action) =>
-			transferPool.run(() =>
-				executeAction(action, ctx, result, reportProgress, () => transferPool.noteRateLimit())
+			transferPool.run(
+				() =>
+					executeAction(action, ctx, result, reportProgress, () =>
+						transferPool.noteRateLimit()
+					),
+				transferSize(action)
 			)
 		),
 		...stateOnly.map((action) =>

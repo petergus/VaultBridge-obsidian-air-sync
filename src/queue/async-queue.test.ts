@@ -309,3 +309,122 @@ describe("AdaptivePool", () => {
 		expect(fourthStarted).toBe(true);
 	});
 });
+
+describe("AdaptivePool byte budget", () => {
+	it("ignores size when byteBudget is undefined (pure count pool)", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 3, max: 3, rampAfter: 100 });
+		const gate = deferred();
+		const tasks = Array.from({ length: 5 }, () => pool.run(() => gate.promise, 1000));
+		await Promise.resolve();
+		expect(pool.running).toBe(3); // count-bound; sizes have no effect
+		gate.resolve();
+		await Promise.all(tasks);
+	});
+
+	it("admits only while the summed in-flight size fits the budget", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 10, max: 10, rampAfter: 100, byteBudget: 30 });
+		const gate = deferred();
+		const tasks = Array.from({ length: 5 }, () => pool.run(() => gate.promise, 10));
+		await Promise.resolve();
+		expect(pool.running).toBe(3); // 3*10 = 30 fits; a 4th would be 40 > 30
+		expect(pool.inFlightBytes).toBe(30);
+		gate.resolve();
+		await Promise.all(tasks);
+	});
+
+	it("count limit still binds when the budget is loose", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 2, max: 2, rampAfter: 100, byteBudget: 1_000_000 });
+		const gate = deferred();
+		const tasks = Array.from({ length: 5 }, () => pool.run(() => gate.promise, 1));
+		await Promise.resolve();
+		expect(pool.running).toBe(2); // count-bound despite ample budget
+		gate.resolve();
+		await Promise.all(tasks);
+	});
+
+	it("admits an over-budget task when the pool is empty (deadlock guard)", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 5, max: 5, rampAfter: 100, byteBudget: 10 });
+		const gate = deferred();
+		const p = pool.run(() => gate.promise, 100); // alone exceeds the budget
+		await Promise.resolve();
+		expect(pool.running).toBe(1);
+		expect(pool.inFlightBytes).toBe(100);
+		gate.resolve();
+		await p;
+	});
+
+	it("holds an over-budget task until the pool drains, then admits it", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 5, max: 5, rampAfter: 100, byteBudget: 10 });
+		const g1 = deferred();
+		const g2 = deferred();
+		const p1 = pool.run(() => g1.promise, 5);
+		const p2 = pool.run(() => g2.promise, 5);
+		await Promise.resolve();
+		expect(pool.running).toBe(2); // 5 + 5 = 10 fits
+
+		let bigStarted = false;
+		const pBig = pool.run(() => { bigStarted = true; return Promise.resolve(); }, 100);
+		g1.resolve();
+		await p1;
+		await Promise.resolve();
+		expect(bigStarted).toBe(false); // running 1 > 0 and over budget → still withheld
+		g2.resolve();
+		await p2;
+		await pBig;
+		expect(bigStarted).toBe(true); // pool empty → deadlock guard admits it
+	});
+
+	it("a single freed large task can admit several small waiters at once", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 10, max: 10, rampAfter: 100, byteBudget: 30 });
+		const gBig = deferred();
+		const pBig = pool.run(() => gBig.promise, 30); // fills the whole budget
+		await Promise.resolve();
+		expect(pool.running).toBe(1);
+
+		const gate = deferred();
+		let started = 0;
+		const smalls = Array.from({ length: 3 }, () =>
+			pool.run(() => { started++; return gate.promise; }, 10)
+		);
+		await Promise.resolve();
+		expect(started).toBe(0); // budget full
+
+		gBig.resolve();
+		await pBig;
+		await Promise.resolve();
+		expect(started).toBe(3); // 3*10 = 30 admitted in one drain
+		expect(pool.running).toBe(3);
+		gate.resolve();
+		await Promise.all(smalls);
+	});
+
+	it("blocks a smaller waiter behind a too-big front waiter (FIFO head-of-line)", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 10, max: 10, rampAfter: 100, byteBudget: 30 });
+		const gHold = deferred();
+		const pHold = pool.run(() => gHold.promise, 25); // 25 in flight, 5 free
+		await Promise.resolve();
+		expect(pool.running).toBe(1);
+
+		let bigStarted = false;
+		let smallStarted = false;
+		// Big (10) is enqueued first and doesn't fit (25 + 10 > 30); small (5) would fit
+		// (25 + 5 = 30) but must not jump ahead of the queued big one.
+		const pBig = pool.run(() => { bigStarted = true; return Promise.resolve(); }, 10);
+		const pSmall = pool.run(() => { smallStarted = true; return Promise.resolve(); }, 5);
+		await Promise.resolve();
+		expect(bigStarted).toBe(false);
+		expect(smallStarted).toBe(false); // head-of-line: not admitted ahead of the big one
+
+		gHold.resolve();
+		await Promise.all([pHold, pBig, pSmall]);
+		expect(bigStarted).toBe(true);
+		expect(smallStarted).toBe(true);
+	});
+
+	it("releases bytes on a rejected run (no leak, no over-admission)", async () => {
+		const pool = new AdaptivePool({ min: 1, start: 10, max: 10, rampAfter: 100, byteBudget: 30 });
+		await expect(pool.run(() => Promise.reject(new Error("boom")), 30)).rejects.toThrow("boom");
+		expect(pool.inFlightBytes).toBe(0);
+		expect(pool.running).toBe(0);
+	});
+});

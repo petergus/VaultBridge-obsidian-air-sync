@@ -99,6 +99,14 @@ export interface AdaptivePoolOpts {
 	max: number;
 	/** Raise the limit by 1 after this many consecutive clean (resolved) runs. */
 	rampAfter: number;
+	/**
+	 * Optional second admission dimension: cap on the SUM of in-flight task sizes
+	 * (passed as the `size` arg to {@link AdaptivePool.run}). A task is admitted only
+	 * when BOTH the count limit and this byte budget allow it — so many small tasks
+	 * run concurrent while large ones self-throttle. Omit (or run with `size` 0) to
+	 * disable the dimension: the pool then behaves exactly as a pure count pool.
+	 */
+	byteBudget?: number;
 }
 
 /**
@@ -109,20 +117,28 @@ export interface AdaptivePoolOpts {
  * (possibly too-low, or too-high and 429-prone) concurrency.
  *
  * Differences from {@link AsyncPool} that are load-bearing:
- *  - the limit is MUTABLE, so a woken waiter must RE-CHECK it in a `while` loop —
- *    a single `if` is only correct for a fixed limit; after a halving a waiter
- *    could otherwise wake into an over-limit pool and silently defeat throttling;
+ *  - the limit is MUTABLE, so admission is RE-EVALUATED on every state change via
+ *    {@link AdaptivePool.drain}; a single `if` on the count is only correct for a
+ *    fixed limit (after a halving a waiter could otherwise wake into an over-limit
+ *    pool and silently defeat throttling);
  *  - the success streak advances only on a RESOLVED run and resets on a rejected
- *    one, so the pool never ramps up while tasks are failing.
+ *    one, so the pool never ramps up while tasks are failing;
+ *  - admission reserves the slot (and bytes) SYNCHRONOUSLY when a waiter is woken
+ *    (see {@link AdaptivePool.admit}), not on the woken task's own re-check. With a
+ *    byte budget one freed task can admit SEVERAL waiters; if each only re-checked on
+ *    wake they would all pass against the same not-yet-incremented state and
+ *    over-admit. Reserving up front makes the drain authoritative.
  */
 export class AdaptivePool {
 	private _running = 0;
-	private waiting: (() => void)[] = [];
+	private _inFlightBytes = 0;
+	private waiting: { size: number; resolve: () => void }[] = [];
 	private _limit: number;
 	private successStreak = 0;
 	private readonly min: number;
 	private readonly max: number;
 	private readonly rampAfter: number;
+	private readonly byteBudget?: number;
 
 	constructor(opts: AdaptivePoolOpts) {
 		if (opts.min < 1) throw new Error("AdaptivePool: min must be at least 1");
@@ -131,6 +147,7 @@ export class AdaptivePool {
 		this.min = opts.min;
 		this.max = opts.max;
 		this.rampAfter = opts.rampAfter;
+		this.byteBudget = opts.byteBudget;
 		this._limit = Math.min(this.max, Math.max(this.min, opts.start));
 	}
 
@@ -144,13 +161,58 @@ export class AdaptivePool {
 		return this._running;
 	}
 
-	async run<T>(fn: () => Promise<T>): Promise<T> {
-		// The limit is mutable; re-check after every wake (a halving may have
-		// dropped it below `running` while this waiter was queued).
-		while (this._running >= this._limit) {
-			await new Promise<void>((resolve) => this.waiting.push(resolve));
-		}
+	/** Sum of in-flight task sizes (observability/tests). */
+	get inFlightBytes(): number {
+		return this._inFlightBytes;
+	}
+
+	/**
+	 * Whether a task of `size` may start right now. Count first; then the byte
+	 * budget, with a deadlock guard: an EMPTY pool always admits one task even if it
+	 * alone exceeds the budget (otherwise a single over-budget file would wait
+	 * forever).
+	 */
+	private canAdmit(size: number): boolean {
+		if (this._running >= this._limit) return false;
+		if (this.byteBudget === undefined) return true;
+		if (this._running === 0) return true;
+		return this._inFlightBytes + size <= this.byteBudget;
+	}
+
+	/** Reserve a slot (and its bytes) for an admitted task. */
+	private admit(size: number): void {
 		this._running++;
+		this._inFlightBytes += size;
+	}
+
+	/**
+	 * Admit waiters front-to-back while there is room. FIFO with head-of-line
+	 * blocking: a too-big waiter at the front blocks smaller ones behind it until it
+	 * fits — fair, and never starves large files. Called wherever capacity grows
+	 * (a completion frees a slot/bytes; a ramp raises the limit). NOT from
+	 * {@link AdaptivePool.noteRateLimit}, which only ever shrinks.
+	 */
+	private drain(): void {
+		for (let head = this.waiting[0]; head !== undefined && this.canAdmit(head.size); head = this.waiting[0]) {
+			this.waiting.shift();
+			this.admit(head.size);
+			head.resolve();
+		}
+	}
+
+	async run<T>(fn: () => Promise<T>, size = 0): Promise<T> {
+		// Fast path only when there is no backlog: a new arrival must not jump ahead of
+		// already-waiting tasks (FIFO), else a stream of small tasks could starve a
+		// queued large one under the byte budget. With a backlog, queue and let drain()
+		// admit in order. (For a pure count pool a backlog implies running >= limit, so
+		// this guard never changes its behaviour.)
+		if (this.waiting.length === 0 && this.canAdmit(size)) {
+			this.admit(size);
+		} else {
+			// Reservation happens in drain() when this waiter is woken, so the woken
+			// task starts immediately without re-checking.
+			await new Promise<void>((resolve) => this.waiting.push({ size, resolve }));
+		}
 		try {
 			const result = await fn();
 			// Success accounting on the resolved path only — a failed run must not
@@ -160,7 +222,7 @@ export class AdaptivePool {
 				this._limit++;
 				this.successStreak = 0;
 				// Newly-created headroom may admit a waiter.
-				this.waiting.shift()?.();
+				this.drain();
 			}
 			return result;
 		} catch (err) {
@@ -169,7 +231,9 @@ export class AdaptivePool {
 			throw err;
 		} finally {
 			this._running--;
-			if (this._running < this._limit) this.waiting.shift()?.();
+			this._inFlightBytes -= size;
+			// A freed slot + bytes may admit several waiters at once.
+			this.drain();
 		}
 	}
 
