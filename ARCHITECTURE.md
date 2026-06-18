@@ -28,7 +28,7 @@ One row per directory; see the layer diagram and per-doc references for module d
 | `ui/` | Settings UI: the main settings tab, the backend-connection section, and Google Drive / Dropbox / OneDrive-specific settings and folder-pick modals. |
 | `store/` | IndexedDB plumbing: the `IDBHelper` transaction wrapper, the generic `MetadataStore<T>` file-metadata cache, and `content-codec` (deflate compression for stored 3-way merge base content). |
 | `logging/` | `Logger` — structured log writer (`.airsync/logs/`). |
-| `queue/` | Concurrency primitives: `AsyncPool` (fixed bounded concurrency), `AdaptivePool` (AIMD concurrency for the transfer phase — ramps on success, halves on a rate-limit), and `AsyncMutex`. |
+| `queue/` | Concurrency primitives: `AsyncPool` (fixed bounded concurrency), `AdaptivePool` (AIMD concurrency for the transfer phase — ramps on success, halves on a rate-limit, with an optional byte budget capping in-flight bytes to bound memory), and `AsyncMutex`. |
 | `utils/` | Helpers: `sha256()` / `md5()` hashing, the QuickXorHash implementation (`quickxor.ts`) for OneDrive, path utilities (`getFileExtension`, etc.), gitignore-style `isIgnored()` pattern matching, and line parsing (`parse-lines.ts`). |
 
 ## Layer architecture
