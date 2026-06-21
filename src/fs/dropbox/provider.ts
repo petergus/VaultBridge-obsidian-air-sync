@@ -37,6 +37,7 @@ export interface DropboxBackendData extends PkceAppFolderData {
 	 * cleared afterward. Empty ⇒ bind the default (`/<vaultName>`).
 	 */
 	pendingPickedFolderPath: string;
+	customClientId: string;
 }
 
 const DEFAULT_DROPBOX_DATA: DropboxBackendData = {
@@ -45,6 +46,7 @@ const DEFAULT_DROPBOX_DATA: DropboxBackendData = {
 	pendingCodeVerifier: "",
 	pendingAuthState: "",
 	pendingPickedFolderPath: "",
+	customClientId: "",
 };
 
 /**
@@ -64,7 +66,7 @@ export class DropboxProvider extends PkceAppFolderProvider<DropboxBackendData, D
 	readonly auth = new DropboxAuthProvider(this.secretStore);
 
 	protected readonly defaultData = DEFAULT_DROPBOX_DATA;
-	protected readonly dbNamePrefix = "air-sync-dropbox";
+	protected readonly dbNamePrefix = "vaultbridge-dropbox";
 
 	protected createClient(getToken: (forceRefresh?: boolean) => Promise<string>, logger?: Logger): DropboxClient {
 		return new DropboxClient(getToken, logger);
@@ -133,5 +135,14 @@ export class DropboxProvider extends PkceAppFolderProvider<DropboxBackendData, D
 		const client = this.makeDetachedClient(data, logger);
 		const meta = await client.getMetadata(data.remoteVaultFolderId);
 		return meta.path_display ?? null;
+	}
+
+	override async disconnect(settings: AirSyncSettings): Promise<Record<string, unknown>> {
+		const data = this.getData(settings);
+		const baseResult = await super.disconnect(settings);
+		return {
+			...baseResult,
+			customClientId: data.customClientId,
+		};
 	}
 }

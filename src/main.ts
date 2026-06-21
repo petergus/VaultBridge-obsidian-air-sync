@@ -131,8 +131,8 @@ export default class AirSyncPlugin extends Plugin {
 		this.settingTab = new AirSyncSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
 
-		// OAuth callback via obsidian://air-sync-auth?access_token=...&state=... or ?code=...&state=...
-		this.registerObsidianProtocolHandler("air-sync-auth", (params) => {
+		// OAuth callback via obsidian://vaultbridge-auth?access_token=...&state=... or ?code=...&state=...
+		this.registerObsidianProtocolHandler("vaultbridge-auth", (params) => {
 			if (!params.access_token && !params.code) {
 				new Notice("Authorization failed: no token or code received");
 				return;
@@ -145,10 +145,10 @@ export default class AirSyncPlugin extends Plugin {
 			void this.backendManager.completeBackendConnect(url.toString());
 		});
 
-		// Web folder-picker result via obsidian://air-sync-folder. Backend-agnostic:
+		// Web folder-picker result via obsidian://vaultbridge-folder. Backend-agnostic:
 		// BackendManager routes to the active backend's completeWebFolderPick. Kept
 		// separate from auth — distinct payload, no sniffing dispatch needed.
-		this.registerObsidianProtocolHandler("air-sync-folder", (params) => {
+		this.registerObsidianProtocolHandler("vaultbridge-folder", (params) => {
 			void this.backendManager.completeBackendFolderPick(params);
 		});
 

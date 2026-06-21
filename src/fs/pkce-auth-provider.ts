@@ -47,8 +47,9 @@ export abstract class PkceAuthProvider<TAuth extends PkceTokenManager> implement
 	protected abstract buildAuthorizeUrl(opts: { clientId: string; codeChallenge: string; state: string }): string;
 
 	/** Get or lazily create the shared token manager (so refreshed tokens are persistable). */
-	getOrCreateAuth(logger?: Logger): TAuth {
-		if (!this.tokenAuth) this.tokenAuth = this.createAuth(this.clientId, logger ?? this.logger);
+	getOrCreateAuth(logger?: Logger, clientId?: string): TAuth {
+		const actualClientId = clientId || this.clientId;
+		if (!this.tokenAuth) this.tokenAuth = this.createAuth(actualClientId, logger ?? this.logger);
 		return this.tokenAuth;
 	}
 
@@ -59,8 +60,9 @@ export abstract class PkceAuthProvider<TAuth extends PkceTokenManager> implement
 	 * refresh token from a detached refresh is persisted to SecretStorage — otherwise it
 	 * would be discarded with this instance, leaving the stored token stale.
 	 */
-	createDetachedAuth(logger?: Logger): TAuth {
-		const auth = this.createAuth(this.clientId, logger ?? this.logger);
+	createDetachedAuth(logger?: Logger, clientId?: string): TAuth {
+		const actualClientId = clientId || this.clientId;
+		const auth = this.createAuth(actualClientId, logger ?? this.logger);
 		auth.setRefreshTokenRotatedHook((rt) => setBackendSecret(this.secretStore, this.backendType, "refresh", rt));
 		return auth;
 	}
@@ -79,13 +81,15 @@ export abstract class PkceAuthProvider<TAuth extends PkceTokenManager> implement
 		return hasBackendSecret(this.secretStore, this.backendType, "refresh");
 	}
 
-	async startAuth(_backendData: Record<string, unknown>): Promise<Record<string, unknown>> {
+	async startAuth(backendData: Record<string, unknown>): Promise<Record<string, unknown>> {
 		const codeVerifier = generateRandomString(64);
 		const codeChallenge = await computeS256Challenge(codeVerifier);
 		// base64url state (URL-transit safe); it returns through the
 		// obsidian://air-sync-auth deep link and is validated in completeAuth.
 		const state = buildOAuthState();
-		const url = this.buildAuthorizeUrl({ clientId: this.clientId, codeChallenge, state });
+		const customClientId = (backendData.customClientId as string) || undefined;
+		const clientId = customClientId || this.clientId;
+		const url = this.buildAuthorizeUrl({ clientId, codeChallenge, state });
 		if (Platform.isMobile) {
 			window.location.href = url;
 		} else {
@@ -106,7 +110,8 @@ export abstract class PkceAuthProvider<TAuth extends PkceTokenManager> implement
 			throw new Error("PKCE code verifier is missing. Please restart the authorization flow.");
 		}
 
-		const auth = this.getOrCreateAuth();
+		const customClientId = (backendData.customClientId as string) || undefined;
+		const auth = this.getOrCreateAuth(undefined, customClientId);
 		await auth.exchangeCode(params.code, codeVerifier);
 		const tokens = auth.getTokenState();
 		setBackendSecret(this.secretStore, this.backendType, "refresh", tokens.refreshToken);

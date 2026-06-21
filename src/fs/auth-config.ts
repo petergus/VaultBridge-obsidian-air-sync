@@ -13,7 +13,7 @@
  * authorization-code flow otherwise requires https/localhost), so the code can
  * return straight to Obsidian.
  */
-export const PLUGIN_REDIRECT_URI = "obsidian://air-sync-auth";
+export const PLUGIN_REDIRECT_URI = "obsidian://vaultbridge-auth";
 
 /** Air Sync auth relay server (confidential client; server-side token exchange). */
 const GOOGLE_AUTH_SERVER_URL = "https://auth-airsync.takezo.dev";

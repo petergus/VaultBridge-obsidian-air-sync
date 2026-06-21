@@ -9,7 +9,7 @@
  */
 
 /** Root folder name created in the backend storage */
-export const REMOTE_VAULT_ROOT = "obsidian-air-sync";
+export const REMOTE_VAULT_ROOT = "vaultbridge";
 
 /**
  * Reserved sync path for the backend's own vault metadata. It is managed

@@ -41,7 +41,7 @@ describe("OneDriveAuthProvider.startAuth", () => {
 		expect(url.searchParams.get("response_type")).toBe("code");
 		expect(url.searchParams.get("code_challenge_method")).toBe("S256");
 		expect(url.searchParams.get("code_challenge")).toBeTruthy();
-		expect(url.searchParams.get("redirect_uri")).toBe("obsidian://air-sync-auth");
+		expect(url.searchParams.get("redirect_uri")).toBe("obsidian://vaultbridge-auth");
 		expect(url.searchParams.get("scope")).toContain("Files.ReadWrite.AppFolder");
 		expect(url.searchParams.get("scope")).toContain("offline_access");
 
@@ -70,7 +70,7 @@ describe("OneDriveAuthProvider.completeAuth", () => {
 			mockRes({ access_token: "AT", refresh_token: "RT", expires_in: 3600 }),
 		);
 		const { auth, store } = await makeProvider();
-		const out = await auth.completeAuth("obsidian://air-sync-auth?code=THECODE&state=abc", {
+		const out = await auth.completeAuth("obsidian://vaultbridge-auth?code=THECODE&state=abc", {
 			pendingAuthState: "abc",
 			pendingCodeVerifier: "verifier-xyz",
 		});
@@ -94,21 +94,21 @@ describe("OneDriveAuthProvider.completeAuth", () => {
 	it("rejects on a state mismatch (CSRF)", async () => {
 		const { auth } = await makeProvider();
 		await expect(
-			auth.completeAuth("obsidian://air-sync-auth?code=C&state=evil", { pendingAuthState: "abc", pendingCodeVerifier: "v" }),
+			auth.completeAuth("obsidian://vaultbridge-auth?code=C&state=evil", { pendingAuthState: "abc", pendingCodeVerifier: "v" }),
 		).rejects.toThrow("State mismatch");
 	});
 
 	it("rejects when the PKCE verifier is missing", async () => {
 		const { auth } = await makeProvider();
 		await expect(
-			auth.completeAuth("obsidian://air-sync-auth?code=C&state=abc", { pendingAuthState: "abc" }),
+			auth.completeAuth("obsidian://vaultbridge-auth?code=C&state=abc", { pendingAuthState: "abc" }),
 		).rejects.toThrow("code verifier is missing");
 	});
 
 	it("rejects when the code is missing from the callback", async () => {
 		const { auth } = await makeProvider();
 		await expect(
-			auth.completeAuth("obsidian://air-sync-auth?state=abc", { pendingAuthState: "abc", pendingCodeVerifier: "v" }),
+			auth.completeAuth("obsidian://vaultbridge-auth?state=abc", { pendingAuthState: "abc", pendingCodeVerifier: "v" }),
 		).rejects.toThrow("Missing code");
 	});
 
@@ -116,7 +116,7 @@ describe("OneDriveAuthProvider.completeAuth", () => {
 		(await spyRequestUrl()).mockResolvedValue(mockRes({ access_token: "AT" }));
 		const { auth } = await makeProvider();
 		await expect(
-			auth.completeAuth("obsidian://air-sync-auth?code=THECODE&state=abc", {
+			auth.completeAuth("obsidian://vaultbridge-auth?code=THECODE&state=abc", {
 				pendingAuthState: "abc",
 				pendingCodeVerifier: "verifier-xyz",
 			}),

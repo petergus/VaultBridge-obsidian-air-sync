@@ -170,14 +170,19 @@ export class DropboxClient {
 	}
 
 	/**
-	 * List the immediate folders directly under the App Folder root, for the in-app
-	 * folder picker. The App Folder scope already namespaces the app, so `""` is the
-	 * app-folder root; `listFolderAll` drains all pages (so a large folder list isn't
-	 * silently truncated in the modal).
+	 * List all folders recursively under the App Folder root, for the in-app folder
+	 * picker. The App Folder scope already namespaces the app, so `""` is the app-folder
+	 * root; `listFolderAll` recursively drains all pages. The folder `name` is mapped to
+	 * its relative path (stripping the leading slash) so the dropdown displays the full path.
 	 */
 	async listAppRootFolders(): Promise<DropboxEntry[]> {
-		const entries = await this.listFolderAll("", false);
-		return entries.filter((e) => e[".tag"] === "folder");
+		const entries = await this.listFolderAll("", true);
+		return entries
+			.filter((e) => e[".tag"] === "folder")
+			.map((e) => ({
+				...e,
+				name: e.path_display.replace(/^\//, ""),
+			}));
 	}
 
 	/** Capture a baseline delta cursor without fetching entries (root via `id:` for stability). */

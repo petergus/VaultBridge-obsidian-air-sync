@@ -32,6 +32,19 @@ export class DropboxSettingsRenderer implements IBackendSettingsRenderer {
 		const authed = provider?.auth.isAuthenticated(settings.backendData ?? {}) ?? false;
 		const data = (settings.backendData ?? {}) as Partial<DropboxBackendData>;
 
+		new Setting(containerEl)
+			.setName("Dropbox App key")
+			.setDesc("Optional. Enter your custom Dropbox API App key (Client ID) to bypass user limits.")
+			.addText((text) =>
+				text
+					.setPlaceholder("Default")
+					.setValue(data.customClientId ?? "")
+					.setDisabled(authed)
+					.onChange(async (value) => {
+						await onSave({ customClientId: value.trim() });
+					})
+			);
+
 		renderConnectionStatus(containerEl, {
 			connected: authed,
 			connectLabel: "Connect to Dropbox",

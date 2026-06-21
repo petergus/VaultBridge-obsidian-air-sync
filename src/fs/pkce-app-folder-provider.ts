@@ -22,6 +22,7 @@ export interface PkceAppFolderData {
 	pendingCodeVerifier: string;
 	pendingAuthState: string;
 	pendingPickedFolderPath: string;
+	customClientId?: string;
 }
 
 /**
@@ -78,13 +79,15 @@ export abstract class PkceAppFolderProvider<
 
 	/** Build a token-bearing client from the stored secrets + expiry (shared auth). */
 	protected makeClient(data: TData, logger?: Logger): TClient {
-		return this.clientFromAuth(this.auth.getOrCreateAuth(logger), data, logger);
+		const clientId = data.customClientId || undefined;
+		return this.clientFromAuth(this.auth.getOrCreateAuth(logger, clientId), data, logger);
 	}
 
 	/** A client on a throwaway auth — for one-off settings reads that must not reset the
 	 *  live sync's shared in-memory tokens. */
 	protected makeDetachedClient(data: TData, logger?: Logger): TClient {
-		return this.clientFromAuth(this.auth.createDetachedAuth(logger), data, logger);
+		const clientId = data.customClientId || undefined;
+		return this.clientFromAuth(this.auth.createDetachedAuth(logger, clientId), data, logger);
 	}
 
 	private clientFromAuth(auth: TAuth, data: TData, logger?: Logger): TClient {

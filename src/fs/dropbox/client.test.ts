@@ -211,10 +211,15 @@ describe("DropboxClient.listFolderAll", () => {
 });
 
 describe("DropboxClient.listAppRootFolders", () => {
-	it("lists the app-folder root (path '') non-recursively, returning only folders", async () => {
+	it("lists the app-folder root (path '') recursively, returning folders mapped to relative display paths", async () => {
 		const spy = (await spyRequestUrl()).mockResolvedValue(
 			mockRes({
-				entries: [dbxFolder("a", "/Alpha"), dbxFile("n", "/note.md"), dbxFolder("b", "/Beta")],
+				entries: [
+					dbxFolder("a", "/Alpha"),
+					dbxFile("n", "/note.md"),
+					dbxFolder("b", "/Beta"),
+					dbxFolder("c", "/Alpha/SubBeta"),
+				],
 				cursor: "c",
 				has_more: false,
 			}),
@@ -222,10 +227,10 @@ describe("DropboxClient.listAppRootFolders", () => {
 		const client = await makeClient();
 		const folders = await client.listAppRootFolders();
 
-		// Files are filtered out — the picker modal only offers folders.
-		expect(folders.map((f) => f.name)).toEqual(["Alpha", "Beta"]);
-		// Queried the app-folder root ("") non-recursively.
+		// Files are filtered out, and folders are mapped to their relative paths.
+		expect(folders.map((f) => f.name)).toEqual(["Alpha", "Beta", "Alpha/SubBeta"]);
+		// Queried the app-folder root ("") recursively.
 		const body = JSON.parse((spy.mock.calls[0]![0] as RequestUrlParam).body as string) as { path: string; recursive: boolean };
-		expect(body).toMatchObject({ path: "", recursive: false });
+		expect(body).toMatchObject({ path: "", recursive: true });
 	});
 });

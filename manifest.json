@@ -1,6 +1,6 @@
 {
-	"id": "air-sync",
-	"name": "Air Sync",
+	"id": "vaultbridge",
+	"name": "VaultBridge",
 	"version": "0.1.31",
 	"minAppVersion": "1.11.4",
 	"description": "Sync your vault with cloud storage (Google Drive, OneDrive, Dropbox).",

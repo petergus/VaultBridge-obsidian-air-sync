@@ -8,6 +8,10 @@ import type { ISecretStore } from "./secret-store";
  * users do not need to reconnect.
  */
 function secretKey(backendType: string, name: string): string {
+	return `vaultbridge-${backendType}-${name}-token`;
+}
+
+function legacySecretKey(backendType: string, name: string): string {
 	return `air-sync-${backendType}-${name}-token`;
 }
 
@@ -20,22 +24,24 @@ function secretKey(backendType: string, name: string): string {
 export function setBackendSecret(store: ISecretStore, backendType: string, name: string, value: string): void {
 	if (value) {
 		store.setSecret(secretKey(backendType, name), value);
+		store.setSecret(legacySecretKey(backendType, name), value);
 	}
 }
 
 /** Read an opaque backend secret, or `""` if absent. */
 export function getBackendSecret(store: ISecretStore, backendType: string, name: string): string {
-	return store.getSecret(secretKey(backendType, name)) ?? "";
+	return store.getSecret(secretKey(backendType, name)) ?? store.getSecret(legacySecretKey(backendType, name)) ?? "";
 }
 
 /** Whether a backend secret of the given name is present. */
 export function hasBackendSecret(store: ISecretStore, backendType: string, name: string): boolean {
-	return !!store.getSecret(secretKey(backendType, name));
+	return !!store.getSecret(secretKey(backendType, name)) || !!store.getSecret(legacySecretKey(backendType, name));
 }
 
 /** Clear the named backend secrets. */
 export function clearBackendSecrets(store: ISecretStore, backendType: string, names: string[]): void {
 	for (const name of names) {
 		store.setSecret(secretKey(backendType, name), "");
+		store.setSecret(legacySecretKey(backendType, name), "");
 	}
 }

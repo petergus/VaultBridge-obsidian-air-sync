@@ -95,7 +95,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		const data = this.getData(settings);
 		if (!data.remoteVaultFolderId) return null;
 		return new MetadataStore<GoogleDriveFile>(`${settings.vaultId}-${data.remoteVaultFolderId}`, {
-			dbNamePrefix: "air-sync-googledrive",
+			dbNamePrefix: "vaultbridge-googledrive",
 			version: 1,
 		});
 	}
