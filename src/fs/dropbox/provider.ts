@@ -1,7 +1,7 @@
 import type { App } from "obsidian";
 import type { IFileSystem } from "../interface";
 import type { IBackendSettingsRenderer } from "../settings-renderer";
-import type { AirSyncSettings } from "../../settings";
+import type { VaultBridgeSettings } from "../../settings";
 import type { Logger } from "../../logging/logger";
 import type { RemoteVaultResolution } from "../remote-vault-contract";
 import { MetadataStore } from "../../store/metadata-store";
@@ -87,7 +87,7 @@ export class DropboxProvider extends PkceAppFolderProvider<DropboxBackendData, D
 
 	async resolveRemoteVault(
 		_app: App,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		vaultName: string,
 		logger?: Logger,
 	): Promise<RemoteVaultResolution> {
@@ -128,7 +128,7 @@ export class DropboxProvider extends PkceAppFolderProvider<DropboxBackendData, D
 	 * settings. The path is not stored — this reflects the folder's live location
 	 * (so a remote move/rename shows up). Returns null if not bound.
 	 */
-	async getRemoteVaultDisplayPath(settings: AirSyncSettings, logger?: Logger): Promise<string | null> {
+	async getRemoteVaultDisplayPath(settings: VaultBridgeSettings, logger?: Logger): Promise<string | null> {
 		const data = this.getData(settings);
 		if (!data.remoteVaultFolderId) return null;
 		// Detached client so this UI read can't reset the live sync's shared tokens.
@@ -137,7 +137,7 @@ export class DropboxProvider extends PkceAppFolderProvider<DropboxBackendData, D
 		return meta.path_display ?? null;
 	}
 
-	override async disconnect(settings: AirSyncSettings): Promise<Record<string, unknown>> {
+	override async disconnect(settings: VaultBridgeSettings): Promise<Record<string, unknown>> {
 		const data = this.getData(settings);
 		const baseResult = await super.disconnect(settings);
 		return {

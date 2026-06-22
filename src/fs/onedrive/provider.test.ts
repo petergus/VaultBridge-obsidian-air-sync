@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import type { RequestUrlParam } from "obsidian";
 import { spyRequestUrl, mockRes, createMockSecretStore, odFolder } from "./test-helpers";
 import { GraphApiError } from "./types";
-import type { AirSyncSettings } from "../../settings";
+import type { VaultBridgeSettings } from "../../settings";
 
 vi.mock("obsidian");
 
@@ -16,8 +16,8 @@ async function makeProvider(secrets: Record<string, string> = {}) {
 	return { provider: new OneDriveProvider(store), store };
 }
 
-function settingsWith(onedrive: Record<string, unknown> = {}): AirSyncSettings {
-	return { vaultId: "vault-1", backendData: onedrive } as unknown as AirSyncSettings;
+function settingsWith(onedrive: Record<string, unknown> = {}): VaultBridgeSettings {
+	return { vaultId: "vault-1", backendData: onedrive } as unknown as VaultBridgeSettings;
 }
 
 const CONNECTED = { "air-sync-onedrive-refresh-token": "RT", "air-sync-onedrive-access-token": "AT" };
@@ -106,11 +106,11 @@ describe("OneDriveProvider.resolveRemoteVault", () => {
 describe("OneDriveProvider.getRemoteVaultDisplayPath", () => {
 	it("resolves the bound folder's current display path from its id (not persisted)", async () => {
 		(await spyRequestUrl()).mockResolvedValue(
-			mockRes({ id: "vaultid", name: "MyVault", parentReference: { id: "approot", path: "/drive/root:/Apps/Air Sync" } }),
+			mockRes({ id: "vaultid", name: "MyVault", parentReference: { id: "approot", path: "/drive/root:/Apps/VaultBridge" } }),
 		);
 		const { provider } = await makeProvider(CONNECTED);
 		const path = await provider.getRemoteVaultDisplayPath(settingsWith({ remoteVaultFolderId: "vaultid", ...FRESH }));
-		expect(path).toBe("/Apps/Air Sync/MyVault");
+		expect(path).toBe("/Apps/VaultBridge/MyVault");
 	});
 
 	it("returns null when no folder is bound", async () => {

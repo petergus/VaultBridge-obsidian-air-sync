@@ -73,7 +73,7 @@ export interface PkceCallbackParams {
 }
 
 /**
- * Parse the `obsidian://air-sync-auth?code=…&state=…` PKCE redirect callback.
+ * Parse the `obsidian://vaultbridge-auth?code=…&state=…` PKCE redirect callback.
  * Shared by every in-plugin PKCE backend so the parse (and its error messages)
  * can't drift between them.
  */

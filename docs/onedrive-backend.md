@@ -100,7 +100,7 @@ In-plugin **Authorization Code + PKCE**, fully worker-less (`fs/onedrive/auth.ts
 on the `consumers` authority (`login.microsoftonline.com/consumers/oauth2/v2.0`).
 The `client_id` is public and there is **no client secret** — the ephemeral
 `code_verifier` is the proof. The authorization code returns **directly** via the
-existing `obsidian://air-sync-auth` protocol handler (no relay page is needed,
+existing `obsidian://vaultbridge-auth` protocol handler (no relay page is needed,
 since Entra permits the custom-scheme redirect for a desktop/mobile public
 client); the plugin then exchanges the code for tokens directly with Microsoft.
 
@@ -113,7 +113,7 @@ client); the plugin then exchanges the code for tokens directly with Microsoft.
   disconnect clears the SecretStorage tokens (sufficient) and drops the in-memory
   manager.
 - The committed `client_id` is a placeholder (`REPLACE_ME`); the maintainer must
-  register the Entra app (personal accounts only, redirect `obsidian://air-sync-auth`)
+  register the Entra app (personal accounts only, redirect `obsidian://vaultbridge-auth`)
   and drop in the real id before release.
 
 ## Provider model

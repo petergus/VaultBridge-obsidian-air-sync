@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { initRegistry, getAllBackendProviders } from "./registry";
 import type { ISecretStore } from "./secret-store";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type { App } from "obsidian";
 
 vi.mock("obsidian");
@@ -18,7 +18,7 @@ const connectedSecretStore: ISecretStore = {
 // A "connected" settings: a bound folder + a future token expiry, plus custom-OAuth
 // fields so the custom backend builds too. Generic enough for every Google Drive-family
 // backend; extend it when a backend needs more to produce a non-null createFs().
-function connectedSettings(): AirSyncSettings {
+function connectedSettings(): VaultBridgeSettings {
 	return {
 		vaultId: "vault-1",
 		backendData: {
@@ -27,7 +27,7 @@ function connectedSettings(): AirSyncSettings {
 			customClientId: "CID",
 			customClientSecret: "CS",
 		},
-	} as unknown as AirSyncSettings;
+	} as unknown as VaultBridgeSettings;
 }
 
 const mockApp = {} as App;

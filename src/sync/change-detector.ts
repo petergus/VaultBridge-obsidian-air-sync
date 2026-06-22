@@ -17,6 +17,16 @@ export interface ChangeDetectorDeps {
 	remoteFs: IFileSystem;
 	stateStore: SyncStateStore;
 	changes: TrackerSnapshot;
+	/**
+	 * Drop excluded paths at the SOURCE — before any per-path `stat()` (network on
+	 * the remote side) or content-read enrichment. An excluded file that exists on
+	 * both sides never gets a sync record (it must not sync), so without this it
+	 * re-enters detection every cycle and is re-read + re-hashed by
+	 * `enrichHashesForInitialMatch` forever — a fixed per-sync cost the orchestrator
+	 * used to absorb only by filtering AFTER detection. Optional; defaults to
+	 * "exclude nothing" so callers/tests opt in.
+	 */
+	isExcluded?: (path: string) => boolean;
 }
 
 export interface CollectChangesOptions {
@@ -86,7 +96,8 @@ async function collectHot(deps: ChangeDetectorDeps): Promise<ChangeSet> {
 		changedPaths.add(p);
 	}
 
-	const pathArray = Array.from(changedPaths);
+	const isExcluded = deps.isExcluded ?? (() => false);
+	const pathArray = Array.from(changedPaths).filter((p) => !isExcluded(p));
 
 	// Fetch local stats, remote stats, and sync records in parallel
 	const [localStats, remoteStats, syncRecords] = await Promise.all([
@@ -169,7 +180,8 @@ async function collectWarm(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 		changedPaths.add(oldPath);
 	}
 
-	const pathArray = Array.from(changedPaths);
+	const isExcluded = deps.isExcluded ?? (() => false);
+	const pathArray = Array.from(changedPaths).filter((p) => !isExcluded(p));
 	const remoteStats = await Promise.all(pathArray.map((p) => remoteFs.stat(p)));
 
 	const localFileMap = new Map(localFiles.filter((f) => !f.isDirectory).map((f) => [f.path, f]));
@@ -195,6 +207,7 @@ async function collectCold(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 		remoteFs.list(),
 	]);
 	const syncRecords = allRecords;
+	const isExcluded = deps.isExcluded ?? (() => false);
 
 	const pathMap = new Map<string, MixedEntity>();
 
@@ -208,16 +221,17 @@ async function collectCold(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 	};
 
 	for (const file of localFiles) {
-		if (file.isDirectory) continue;
+		if (file.isDirectory || isExcluded(file.path)) continue;
 		getOrCreate(file.path).local = file;
 	}
 
 	for (const file of remoteFiles) {
-		if (file.isDirectory) continue;
+		if (file.isDirectory || isExcluded(file.path)) continue;
 		getOrCreate(file.path).remote = file;
 	}
 
 	for (const record of syncRecords) {
+		if (isExcluded(record.path)) continue;
 		getOrCreate(record.path).prevSync = record;
 	}
 

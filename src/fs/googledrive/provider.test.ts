@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { spyRequestUrl, mockRes, createMockSecretStore } from "./test-helpers";
 import { FOLDER_MIME } from "./types";
-import type { AirSyncSettings } from "../../settings";
+import type { VaultBridgeSettings } from "../../settings";
 
 vi.mock("obsidian");
 
@@ -16,8 +16,8 @@ async function makeProvider(secrets: Record<string, string> = {}) {
 	return { provider: new GoogleDriveProvider(store), store };
 }
 
-function settingsWith(googledrive: Record<string, unknown> = {}): AirSyncSettings {
-	return { vaultId: "vault-1", backendData: googledrive } as unknown as AirSyncSettings;
+function settingsWith(googledrive: Record<string, unknown> = {}): VaultBridgeSettings {
+	return { vaultId: "vault-1", backendData: googledrive } as unknown as VaultBridgeSettings;
 }
 
 const CONNECTED = {

@@ -1,7 +1,7 @@
-import { Notice, Platform, Plugin, setIcon, setTooltip } from "obsidian";
-import { DEFAULT_SETTINGS, AirSyncSettings } from "./settings";
+import { Notice, Platform, Plugin, setIcon, setTooltip, TFile } from "obsidian";
+import { DEFAULT_SETTINGS, VaultBridgeSettings } from "./settings";
 import { liftActiveBackendData, normalizeConflictStrategy } from "./settings-normalize";
-import { AirSyncSettingTab } from "./ui/settings";
+import { VaultBridgeSettingTab } from "./ui/settings";
 import { LocalFs } from "./fs/local/index";
 import { BackendManager } from "./fs/backend-manager";
 import { initRegistry, getAllBackendProviders } from "./fs/registry";
@@ -13,9 +13,10 @@ import { ScreenWakeLockManager } from "./sync/wake-lock";
 import { LocalChangeTracker } from "./sync/local-tracker";
 import { Logger, getDeviceName } from "./logging/logger";
 import { ConflictHistory } from "./sync/conflict-history";
+import { ConflictTracker } from "./sync/conflict-tracker";
 
-export default class AirSyncPlugin extends Plugin {
-	settings!: AirSyncSettings;
+export default class VaultBridgePlugin extends Plugin {
+	settings!: VaultBridgeSettings;
 	private localFs: LocalFs | null = null;
 	backendManager!: BackendManager;
 	private statusBarEl: HTMLElement | null = null;
@@ -24,9 +25,10 @@ export default class AirSyncPlugin extends Plugin {
 	private scheduler!: SyncScheduler;
 	private wakeLock!: ScreenWakeLockManager;
 	private localTracker!: LocalChangeTracker;
-	private settingTab: AirSyncSettingTab | null = null;
+	private settingTab: VaultBridgeSettingTab | null = null;
 	private logger!: Logger;
 	private conflictHistory!: ConflictHistory;
+	conflictTracker!: ConflictTracker;
 
 	async onload() {
 		// Init the registry BEFORE loadSettings: the backendData normalization there
@@ -81,6 +83,7 @@ export default class AirSyncPlugin extends Plugin {
 		});
 
 		this.localTracker = new LocalChangeTracker();
+		this.conflictTracker = new ConflictTracker(this.app);
 
 		this.wakeLock = new ScreenWakeLockManager({
 			isEnabled: () => Platform.isMobile && this.settings.screenWakeLockOnSync,
@@ -112,6 +115,7 @@ export default class AirSyncPlugin extends Plugin {
 			isBackendConnecting: () => this.backendManager.isConnecting(),
 			isLayoutReady: () => this.app.workspace.layoutReady,
 			recordConflicts: (records) => this.conflictHistory.append(records),
+			updateConflictTracker: (paths) => this.conflictTracker.updateIndex(paths),
 		});
 
 		this.scheduler = new SyncScheduler({
@@ -123,12 +127,13 @@ export default class AirSyncPlugin extends Plugin {
 			localTracker: this.localTracker,
 			orchestrator: this.orchestrator,
 			isExcluded: (path) => this.orchestrator.isExcluded(path),
+			cooldownMs: () => Math.max(0, this.settings.foregroundSyncCooldownSec) * 1000,
 			registerEvent: (ref) => this.registerEvent(ref),
 			registerWindowEvent: (type, cb) => this.registerDomEvent(window, type, cb),
 			registerDocumentEvent: (type, cb) => this.registerDomEvent(document, type, cb),
 		});
 
-		this.settingTab = new AirSyncSettingTab(this.app, this);
+		this.settingTab = new VaultBridgeSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
 
 		// OAuth callback via obsidian://vaultbridge-auth?access_token=...&state=... or ?code=...&state=...
@@ -180,6 +185,15 @@ export default class AirSyncPlugin extends Plugin {
 
 		this.scheduler.start();
 
+		// Register local modify listener for conflict resolution updates
+		this.registerEvent(
+			this.app.vault.on("modify", (file) => {
+				if (file instanceof TFile) {
+					void this.conflictTracker.handleFileModification(file);
+				}
+			})
+		);
+
 		// Run one sync once the vault index is loaded. The scheduler defers its
 		// event wiring until then, and runSync() is gated on layoutReady, so this
 		// is the first sync of the session ("caught up on open").
@@ -199,7 +213,7 @@ export default class AirSyncPlugin extends Plugin {
 		this.settings = Object.assign(
 			{},
 			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<AirSyncSettings>,
+			(await this.loadData()) as Partial<VaultBridgeSettings>,
 		);
 
 		let needsSave = false;

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { BackendManager, BackendManagerDeps } from "./backend-manager";
 import type { IBackendProvider } from "./backend";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type { IFileSystem } from "./interface";
 import type { Logger } from "../logging/logger";
 import { AuthError } from "./errors";
@@ -23,7 +23,7 @@ let fakeFs: IFileSystem;
 let fakeResetCheckpoint: ReturnType<typeof vi.fn>;
 
 function createDeps(
-	settings: AirSyncSettings,
+	settings: VaultBridgeSettings,
 	overrides: Partial<BackendManagerDeps> = {},
 ): BackendManagerDeps {
 	const noopLogger = {

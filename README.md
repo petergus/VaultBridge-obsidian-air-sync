@@ -1,4 +1,4 @@
-# Air Sync
+# VaultBridge
 
 Your Obsidian notes, always up to date on every device — without ever thinking about sync. Edit on your laptop, pick up your phone, and it's caught up before you start typing.
 
@@ -19,12 +19,12 @@ Works on desktop and mobile, powered by your own cloud storage:
 
 ## Getting started
 
-1. Open the plugin settings (**Settings → Air Sync**).
+1. Open the plugin settings (**Settings → VaultBridge**).
 2. Pick your backend if more than one is available.
 3. Click **Connect**, then approve access in your browser.
 4. Choose where to sync: use the **default folder** (named after your vault), or **pick an existing folder**.
 
-That's it — Air Sync syncs into that folder from then on.
+That's it — VaultBridge syncs into that folder from then on.
 
 The first sync scans your remote folder, so it may take a little while. After that, syncing is fast.
 
@@ -39,7 +39,7 @@ The first sync scans your remote folder, so it may take a little while. After th
 
 | Command | Description |
 |---------|-------------|
-| `Air Sync: Sync now` | Run a sync manually |
+| `VaultBridge: Sync now` | Run a sync manually |
 
 ---
 
@@ -73,14 +73,14 @@ The authorization code exchange is protected by PKCE — the code cannot be used
 
 ## Troubleshooting
 
-- **Sync looks stuck or incomplete** (for example after Obsidian was closed mid-sync): Open **Settings → Air Sync → Advanced** and click **Rescan**. It re-checks everything against your cloud storage and finishes any leftover work — comparing files rather than re-downloading what you already have, and keeping your sync history.
+- **Sync looks stuck or incomplete** (for example after Obsidian was closed mid-sync): Open **Settings → VaultBridge → Advanced** and click **Rescan**. It re-checks everything against your cloud storage and finishes any leftover work — comparing files rather than re-downloading what you already have, and keeping your sync history.
 - **Authentication completes but sync doesn't start**: Restart the plugin (disable → enable in Community plugins settings), then try syncing manually.
 - **Token error after successful authorization**: Check that the device has a stable network connection — token exchange requires connectivity immediately after authorization.
 - **The browser callback didn't return to Obsidian**: Try disconnecting and reconnecting from the plugin settings.
 
 ## Privacy & network use
 
-Air Sync connects only to the cloud storage you choose, to sync your files:
+VaultBridge connects only to the cloud storage you choose, to sync your files:
 
 - **Google Drive** — `googleapis.com` for sync; sign-in happens on `accounts.google.com`, and a small auth server (`auth-airsync.takezo.dev`) performs the sign-in token exchange.
 - **OneDrive** — `graph.microsoft.com` for sync; sign-in happens on `login.microsoftonline.com` and returns directly to Obsidian (no relay or picker page — the folder is chosen in-app). Personal Microsoft accounts only.
@@ -88,7 +88,7 @@ Air Sync connects only to the cloud storage you choose, to sync your files:
 
 Your vault data is sent only to your chosen storage provider — never to the auth, redirect, or picker pages.
 
-Air Sync only ever sees the folders it created — never the rest of your Google Drive, OneDrive, or Dropbox. (On OneDrive it uses the App Folder, so it can only access its own folder.)
+VaultBridge only ever sees the folders it created — never the rest of your Google Drive, OneDrive, or Dropbox. (On OneDrive it uses the App Folder, so it can only access its own folder.)
 
 ## Disclaimer
 

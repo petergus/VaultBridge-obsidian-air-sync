@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { Setting } from "obsidian";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type {
 	BackendConnectionActions,
 	IBackendSettingsRenderer,
@@ -14,14 +14,14 @@ import { renderBoundFolderField, renderConnectionStatus, renderUnboundAppFolderF
  * OAuth flow, and remote-folder selection.
  *
  * Note: the Dropbox app uses App folder scope, so access is confined to
- * `/Apps/<App>/<vault>` — Air Sync cannot see the rest of the user's Dropbox.
+ * `/Apps/<App>/<vault>` — VaultBridge cannot see the rest of the user's Dropbox.
  */
 export class DropboxSettingsRenderer implements IBackendSettingsRenderer {
 	readonly backendType = "dropbox";
 
 	render(
 		containerEl: HTMLElement,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		onSave: (updates: Record<string, unknown>) => Promise<void>,
 		actions: BackendConnectionActions,
 		app: App,
@@ -33,8 +33,8 @@ export class DropboxSettingsRenderer implements IBackendSettingsRenderer {
 		const data = (settings.backendData ?? {}) as Partial<DropboxBackendData>;
 
 		new Setting(containerEl)
-			.setName("Dropbox App key")
-			.setDesc("Optional. Enter your custom Dropbox API App key (Client ID) to bypass user limits.")
+			.setName("Dropbox app key")
+			.setDesc("Optional custom Dropbox app key (client ID) to bypass user limits.")
 			.addText((text) =>
 				text
 					.setPlaceholder("Default")

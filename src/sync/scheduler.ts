@@ -7,6 +7,20 @@ import { hasChanged, hasRemoteChanged } from "./change-compare";
 
 const DEBOUNCE_MS = 5000;
 
+/**
+ * Default minimum gap between two FOREGROUND-triggered remote re-checks, used when
+ * no `cooldownMs` dep is supplied (e.g. tests). A genuine return (background→
+ * foreground on mobile, app-switch on desktop/tablet) normally fires a sync, but on
+ * mobile the app is backgrounded and resumed constantly — each resume would
+ * otherwise wake the radio for a full remote delta fetch, draining battery for no
+ * real change. Within this window a resume is acknowledged but does NOT re-scan the
+ * remote; `departed` is left set so the first return AFTER the window still syncs
+ * (never a stale miss). Local edits are unaffected — they sync through the
+ * independent debounced vault-change path. The live value is user-configurable
+ * (`foregroundSyncCooldownSec`); `0` disables the throttle. See ADR 0007.
+ */
+const DEFAULT_FOREGROUND_SYNC_COOLDOWN_MS = 60_000;
+
 export interface SyncOrchestrator {
 	runSync(): Promise<void>;
 	pullSingle(path: string): Promise<void>;
@@ -25,6 +39,14 @@ export interface SyncSchedulerDeps {
 	registerEvent: (ref: EventRef) => void;
 	registerWindowEvent: (type: keyof WindowEventMap, cb: () => void) => void;
 	registerDocumentEvent: (type: keyof DocumentEventMap, cb: () => void) => void;
+	/** Injectable clock for the foreground-sync cooldown; defaults to Date.now. */
+	now?: () => number;
+	/**
+	 * Live foreground-sync cooldown in milliseconds (read per signal so a settings
+	 * change applies without re-wiring). `0` disables the throttle. Defaults to
+	 * DEFAULT_FOREGROUND_SYNC_COOLDOWN_MS when omitted.
+	 */
+	cooldownMs?: () => number;
 }
 
 export class SyncScheduler {
@@ -41,9 +63,15 @@ export class SyncScheduler {
 	 * is NOT a return and must not fire a second, redundant sync. See ADR 0007.
 	 */
 	private departed = false;
+	/** Monotonic-ish timestamp of the last foreground-triggered sync (cooldown). */
+	private lastForegroundSyncAt = 0;
+	private readonly now: () => number;
+	private readonly cooldownMs: () => number;
 
 	constructor(deps: SyncSchedulerDeps) {
 		this.deps = deps;
+		this.now = deps.now ?? (() => Date.now());
+		this.cooldownMs = deps.cooldownMs ?? (() => DEFAULT_FOREGROUND_SYNC_COOLDOWN_MS);
 		this.debouncedSync = debounce(
 			() => {
 				if (!this.deps.remoteFs()) return;
@@ -109,7 +137,14 @@ export class SyncScheduler {
 		if (!this.deps.remoteFs()) return;
 		if (this.deps.orchestrator.isSyncing()) return;
 		if (!this.departed) return;
+		// Battery: a resume within the cooldown window is acknowledged but does NOT
+		// re-scan the remote. Leave `departed` SET so the first return after the
+		// window still syncs — skipping the scan must never become skipping the
+		// return. Local edits during the window still sync via the debounced
+		// vault-change path. See FOREGROUND_SYNC_COOLDOWN_MS.
+		if (this.now() - this.lastForegroundSyncAt < this.cooldownMs()) return;
 		this.departed = false;
+		this.lastForegroundSyncAt = this.now();
 		void this.deps.orchestrator.runSync();
 	}
 

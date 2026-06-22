@@ -8,7 +8,7 @@ import {
 	addFile,
 	mockSettings as baseMockSettings,
 } from "../__mocks__/sync-test-helpers";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import { AuthError } from "../fs/errors";
 
 // Make retry backoff instant: the retry tests assert behaviour (retry count,
@@ -22,7 +22,7 @@ vi.mock("./error", async (importOriginal) => {
 	return { ...actual, sleep: () => Promise.resolve() };
 });
 
-function mockSettings(): AirSyncSettings {
+function mockSettings(): VaultBridgeSettings {
 	// Unique vaultId per call keeps each orchestrator's fake-indexeddb store isolated.
 	return baseMockSettings({
 		backendType: "none",

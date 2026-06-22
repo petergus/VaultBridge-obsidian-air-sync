@@ -1,4 +1,4 @@
-# Air Sync — Obsidian Plugin
+# VaultBridge — Obsidian Plugin
 
 An Obsidian community plugin for bidirectional sync between vaults and cloud storage.
 
@@ -85,7 +85,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the rationale behind these.
 ## Build artifacts
 
 `main.js`, `manifest.json`, `styles.css` → placed in the vault's
-`.obsidian/plugins/air-sync/` (the folder name matches the manifest `id`). Never commit
+`.obsidian/plugins/vaultbridge/` (the folder name matches the manifest `id`). Never commit
 `node_modules/` or `main.js`.
 
 ## Releases

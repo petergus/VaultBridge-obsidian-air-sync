@@ -1,5 +1,5 @@
 import type { App } from "obsidian";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 
 /** Actions that settings renderers can invoke for connection flow UI */
 export interface BackendConnectionActions {
@@ -26,7 +26,7 @@ export interface IBackendSettingsRenderer {
 
 	render(
 		containerEl: HTMLElement,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		onSave: (updates: Record<string, unknown>) => Promise<void>,
 		actions: BackendConnectionActions,
 		app: App,

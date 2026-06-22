@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { Setting } from "obsidian";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type {
 	BackendConnectionActions,
 	IBackendSettingsRenderer,
@@ -14,7 +14,7 @@ import { renderBoundFolderField, renderConnectionStatus, renderUnboundAppFolderF
  * OAuth flow, and remote-folder selection via an in-app modal.
  *
  * The OneDrive app uses the App Folder scope (personal Microsoft accounts only), so
- * access is confined to the app folder — Air Sync cannot see the rest of the user's
+ * access is confined to the app folder — VaultBridge cannot see the rest of the user's
  * OneDrive. The folder modal therefore lists only folders under the app folder.
  */
 export class OneDriveSettingsRenderer implements IBackendSettingsRenderer {
@@ -22,7 +22,7 @@ export class OneDriveSettingsRenderer implements IBackendSettingsRenderer {
 
 	render(
 		containerEl: HTMLElement,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		onSave: (updates: Record<string, unknown>) => Promise<void>,
 		actions: BackendConnectionActions,
 		app: App,

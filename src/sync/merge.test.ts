@@ -18,6 +18,11 @@ describe("isMergeEligible", () => {
 		expect(isMergeEligible("image.svg", 100)).toBe(true);
 	});
 
+	it("returns true for Obsidian-native text formats (.canvas, .base)", () => {
+		expect(isMergeEligible("board.canvas", 100)).toBe(true);
+		expect(isMergeEligible("00-inbox/needs-review.base", 100)).toBe(true);
+	});
+
 	it("returns false for binary file extensions", () => {
 		expect(isMergeEligible("photo.png", 100)).toBe(false);
 		expect(isMergeEligible("image.jpg", 100)).toBe(false);
@@ -70,10 +75,9 @@ describe("threeWayMerge", () => {
 
 		expect(result.success).toBe(false);
 		expect(result.hasConflicts).toBe(true);
-		expect(result.content).toContain("<<<<<<< LOCAL");
 		expect(result.content).toContain("Edited by local author.");
-		expect(result.content).toContain("Edited by remote author.");
-		expect(result.content).toContain(">>>>>>> REMOTE");
+		expect(result.content).toContain("> [!sync-conflict] Remote version");
+		expect(result.content).toContain("> Edited by remote author.");
 	});
 
 	it("handles identical changes (no conflict)", () => {
@@ -215,8 +219,8 @@ describe("threeWayMerge", () => {
 		const result = threeWayMerge(base, local, remote);
 
 		expect(result.hasConflicts).toBe(true);
-		expect(result.content).toContain("<<<<<<< LOCAL");
-		expect(result.content).toContain(">>>>>>> REMOTE");
+		expect(result.content).toContain("> [!sync-conflict] Remote version");
+		expect(result.content).toContain("> Bb");
 	});
 
 	it("conflicts when empty base and both sides add different content", () => {
@@ -247,7 +251,7 @@ describe("threeWayMerge (minimized conflict markers)", () => {
 
 		expect(result.hasConflicts).toBe(true);
 		expect(result.content).toBe(
-			"header\n<<<<<<< LOCAL\nlocal-edit\n=======\nremote-edit\n>>>>>>> REMOTE\nfooter"
+			"header\nlocal-edit\n> [!sync-conflict] Remote version\n> remote-edit\nfooter"
 		);
 	});
 
@@ -260,7 +264,7 @@ describe("threeWayMerge (minimized conflict markers)", () => {
 
 		expect(result.hasConflicts).toBe(true);
 		expect(result.content).toBe(
-			"A\n<<<<<<< LOCAL\nX\n=======\nB2\n>>>>>>> REMOTE\nC\n<<<<<<< LOCAL\nY\n=======\nD2\n>>>>>>> REMOTE\nE"
+			"A\nX\n> [!sync-conflict] Remote version\n> B2\nC\nY\n> [!sync-conflict] Remote version\n> D2\nE"
 		);
 	});
 

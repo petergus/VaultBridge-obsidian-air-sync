@@ -170,19 +170,36 @@ export class DropboxClient {
 	}
 
 	/**
-	 * List all folders recursively under the App Folder root, for the in-app folder
-	 * picker. The App Folder scope already namespaces the app, so `""` is the app-folder
-	 * root; `listFolderAll` recursively drains all pages. The folder `name` is mapped to
-	 * its relative path (stripping the leading slash) so the dropdown displays the full path.
+	 * List immediate subfolders of a given path (relative to the App Folder root).
+	 * If path is "", it lists folders directly under the App Folder root.
+	 * Returns `{ name: string, path: string }[]`.
 	 */
-	async listAppRootFolders(): Promise<DropboxEntry[]> {
-		const entries = await this.listFolderAll("", true);
+	async listFolders(path: string): Promise<{ name: string; path: string }[]> {
+		const apiPath = path ? `/${path}` : "";
+		const res = await this.listFolder(apiPath, false);
+		const entries = [...res.entries];
+		let currentRes = res;
+		for (let guard = 0; currentRes.has_more; guard++) {
+			if (guard >= LIST_PAGE_CAP) {
+				throw new Error(`listFolders: pagination exceeded ${LIST_PAGE_CAP} pages`);
+			}
+			const nextPage = await this.listFolderContinue(currentRes.cursor);
+			entries.push(...nextPage.entries);
+			currentRes = nextPage;
+		}
+
 		return entries
 			.filter((e) => e[".tag"] === "folder")
-			.map((e) => ({
-				...e,
-				name: e.path_display.replace(/^\//, ""),
-			}));
+			.map((e) => {
+				const fullPath = e.path_display || e.path_lower || "";
+				// Strip leading slash to make it relative to the App Folder root
+				const relPath = fullPath.replace(/^\//, "");
+				return {
+					name: e.name || "",
+					path: relPath,
+				};
+			})
+			.filter((e) => e.name !== "");
 	}
 
 	/** Capture a baseline delta cursor without fetching entries (root via `id:` for stability). */

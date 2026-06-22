@@ -2,7 +2,7 @@ import type { App } from "obsidian";
 import { Notice } from "obsidian";
 import { getBackendData } from "../backend";
 import type { ISecretStore } from "../secret-store";
-import type { AirSyncSettings } from "../../settings";
+import type { VaultBridgeSettings } from "../../settings";
 import type { Logger } from "../../logging/logger";
 import type { RemoteVaultResolution } from "../remote-vault-contract";
 import { GoogleAuthDirect } from "./auth";
@@ -36,7 +36,7 @@ const DEFAULT_GOOGLE_DRIVE_CUSTOM_DATA: GoogleDriveCustomBackendData = {
 	customIncludeGrantedScopes: false,
 };
 
-function getGoogleDriveCustomData(settings: AirSyncSettings): GoogleDriveCustomBackendData {
+function getGoogleDriveCustomData(settings: VaultBridgeSettings): GoogleDriveCustomBackendData {
 	return {
 		...DEFAULT_GOOGLE_DRIVE_CUSTOM_DATA,
 		...getBackendData<GoogleDriveCustomBackendData>(settings),
@@ -102,7 +102,7 @@ export class GoogleDriveCustomProvider extends GoogleDriveProviderBase {
 
 	async resolveRemoteVault(
 		app: App,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		vaultName: string,
 		logger?: Logger,
 	): Promise<RemoteVaultResolution> {
@@ -113,7 +113,7 @@ export class GoogleDriveCustomProvider extends GoogleDriveProviderBase {
 		return super.resolveRemoteVault(app, settings, vaultName, logger);
 	}
 
-	async disconnect(settings: AirSyncSettings): Promise<Record<string, unknown>> {
+	async disconnect(settings: VaultBridgeSettings): Promise<Record<string, unknown>> {
 		await this.auth.revokeAuth();
 		this.clearPluginSecrets();
 		const data = getGoogleDriveCustomData(settings);
@@ -128,7 +128,7 @@ export class GoogleDriveCustomProvider extends GoogleDriveProviderBase {
 		};
 	}
 
-	protected getData(settings: AirSyncSettings): GoogleDriveBackendData {
+	protected getData(settings: VaultBridgeSettings): GoogleDriveBackendData {
 		return getGoogleDriveCustomData(settings);
 	}
 

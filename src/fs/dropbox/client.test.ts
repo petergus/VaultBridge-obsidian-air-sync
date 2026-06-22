@@ -210,27 +210,58 @@ describe("DropboxClient.listFolderAll", () => {
 	});
 });
 
-describe("DropboxClient.listAppRootFolders", () => {
-	it("lists the app-folder root (path '') recursively, returning folders mapped to relative display paths", async () => {
+describe("DropboxClient.listFolders", () => {
+	it("lists immediate subfolders of the app-folder root (path '') non-recursively, returning immediate folders and names", async () => {
 		const spy = (await spyRequestUrl()).mockResolvedValue(
 			mockRes({
 				entries: [
 					dbxFolder("a", "/Alpha"),
 					dbxFile("n", "/note.md"),
 					dbxFolder("b", "/Beta"),
-					dbxFolder("c", "/Alpha/SubBeta"),
+					dbxFolder("c", "/Alpha/SubBeta"), // In a non-recursive listing, Dropbox shouldn't return this, but let's test mapping filter/paths.
 				],
 				cursor: "c",
 				has_more: false,
 			}),
 		);
 		const client = await makeClient();
-		const folders = await client.listAppRootFolders();
+		const folders = await client.listFolders("");
 
-		// Files are filtered out, and folders are mapped to their relative paths.
-		expect(folders.map((f) => f.name)).toEqual(["Alpha", "Beta", "Alpha/SubBeta"]);
-		// Queried the app-folder root ("") recursively.
+		// Files are filtered out, and folders are mapped to names and relative paths.
+		expect(folders).toEqual([
+			{ name: "Alpha", path: "Alpha" },
+			{ name: "Beta", path: "Beta" },
+			{ name: "SubBeta", path: "Alpha/SubBeta" },
+		]);
+		
+		// Queried the app-folder root ("") non-recursively.
 		const body = JSON.parse((spy.mock.calls[0]![0] as RequestUrlParam).body as string) as { path: string; recursive: boolean };
-		expect(body).toMatchObject({ path: "", recursive: true });
+		expect(body).toMatchObject({ path: "", recursive: false });
+	});
+
+	it("lists immediate subfolders of a nested path non-recursively, prepending path and draining has_more", async () => {
+		const calls: RequestUrlParam[] = [];
+		(await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
+			const o = typeof opts === "string" ? { url: opts } : opts;
+			calls.push(o);
+			if (o.url.includes("list_folder/continue")) {
+				return Promise.resolve(mockRes({ entries: [dbxFolder("d2", "/Alpha/Delta")], cursor: "c2", has_more: false }));
+			}
+			return Promise.resolve(mockRes({ entries: [dbxFolder("d1", "/Alpha/Gamma")], cursor: "c1", has_more: true }));
+		});
+
+		const client = await makeClient();
+		const folders = await client.listFolders("Alpha");
+
+		expect(folders).toEqual([
+			{ name: "Gamma", path: "Alpha/Gamma" },
+			{ name: "Delta", path: "Alpha/Delta" },
+		]);
+
+		const firstBody = JSON.parse(calls[0]!.body as string) as { path: string; recursive: boolean };
+		expect(firstBody).toMatchObject({ path: "/Alpha", recursive: false });
+
+		const secondBody = JSON.parse(calls[1]!.body as string) as { cursor: string };
+		expect(secondBody).toEqual({ cursor: "c1" });
 	});
 });

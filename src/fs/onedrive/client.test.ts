@@ -273,3 +273,43 @@ describe("OneDriveClient error handling", () => {
 		expect(delays[1]).toBe(64_000);
 	});
 });
+
+describe("OneDriveClient.listFolders", () => {
+	it("lists immediate folders in root (path '') non-recursively, filtering only folders", async () => {
+		const spy = (await spyRequestUrl()).mockResolvedValue(
+			mockRes({
+				value: [
+					odFolder("f1", "FolderA", "root"),
+					odFile("f2", "file.txt", "root"),
+					odFolder("f3", "FolderB", "root"),
+				],
+			}),
+		);
+		const client = await makeClient();
+		const result = await client.listFolders("");
+
+		expect(result).toEqual([
+			{ name: "FolderA", path: "FolderA" },
+			{ name: "FolderB", path: "FolderB" },
+		]);
+		expect(String((spy.mock.calls[0]![0] as RequestUrlParam).url)).toContain("/me/drive/special/approot/children");
+	});
+
+	it("lists folders nested inside a path, encoding the path and joining relative paths", async () => {
+		const spy = (await spyRequestUrl()).mockResolvedValue(
+			mockRes({
+				value: [
+					odFolder("f4", "SubFolder", "f1"),
+				],
+			}),
+		);
+		const client = await makeClient();
+		const result = await client.listFolders("Folder A");
+
+		expect(result).toEqual([
+			{ name: "SubFolder", path: "Folder A/SubFolder" },
+		]);
+		expect(String((spy.mock.calls[0]![0] as RequestUrlParam).url)).toContain("/me/drive/special/approot:/Folder%20A:/children");
+	});
+});
+

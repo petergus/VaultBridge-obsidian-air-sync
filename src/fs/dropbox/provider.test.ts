@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { RequestUrlParam } from "obsidian";
 import { spyRequestUrl, mockRes, createMockSecretStore, dbxFolder, dbxFile } from "./test-helpers";
-import type { AirSyncSettings } from "../../settings";
+import type { VaultBridgeSettings } from "../../settings";
 
 vi.mock("obsidian");
 
@@ -15,10 +15,10 @@ async function makeProvider(secrets: Record<string, string> = {}) {
 	return { provider: new DropboxProvider(store), store };
 }
 
-function settingsWith(dropbox: Record<string, unknown> = {}): AirSyncSettings {
+function settingsWith(dropbox: Record<string, unknown> = {}): VaultBridgeSettings {
 	// backendData is the active backend's single flat bag — Dropbox's params live at
 	// the top level, not under a "dropbox" key.
-	return { vaultId: "vault-1", backendData: dropbox } as unknown as AirSyncSettings;
+	return { vaultId: "vault-1", backendData: dropbox } as unknown as VaultBridgeSettings;
 }
 
 const CONNECTED = { "air-sync-dropbox-refresh-token": "RT", "air-sync-dropbox-access-token": "AT" };

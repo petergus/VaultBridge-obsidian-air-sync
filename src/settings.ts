@@ -1,6 +1,6 @@
 import type { ConflictStrategy } from "./sync/types";
 
-export interface AirSyncSettings {
+export interface VaultBridgeSettings {
 	/** Unique identifier for this vault (used as IndexedDB key) */
 	vaultId: string;
 	/** Selected backend type (e.g. "googledrive") */
@@ -15,6 +15,14 @@ export interface AirSyncSettings {
 	syncDotPaths: string[];
 	/** Maximum file size in MB to sync on mobile */
 	mobileMaxFileSizeMB: number;
+	/**
+	 * Minimum seconds between two resume-triggered remote re-checks. Returning to
+	 * the app within this window is acknowledged but does not re-scan the remote —
+	 * the battery-saver for mobile, where the app is foregrounded constantly. Local
+	 * edits still sync immediately. `0` disables the throttle (re-check on every
+	 * resume).
+	 */
+	foregroundSyncCooldownSec: number;
 	/** Hold a screen wake lock while syncing so mobile devices don't sleep mid-sync */
 	screenWakeLockOnSync: boolean;
 	/** Show a notice summarizing each completed sync cycle (independent of logging) */
@@ -43,7 +51,7 @@ export interface AirSyncSettings {
 	lastSyncedIdentity: string;
 }
 
-export const DEFAULT_SETTINGS: AirSyncSettings = {
+export const DEFAULT_SETTINGS: VaultBridgeSettings = {
 	vaultId: "",
 	backendType: "googledrive",
 	conflictStrategy: "auto_merge",
@@ -51,6 +59,7 @@ export const DEFAULT_SETTINGS: AirSyncSettings = {
 	syncDotPaths: [],
 	enableThreeWayMerge: true,
 	mobileMaxFileSizeMB: 10,
+	foregroundSyncCooldownSec: 60,
 	screenWakeLockOnSync: false,
 	showSyncNotifications: false,
 	enableLogging: false,

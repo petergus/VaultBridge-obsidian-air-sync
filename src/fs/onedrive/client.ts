@@ -174,23 +174,36 @@ export class OneDriveClient {
 		return items;
 	}
 
-	/** List immediate folders directly under the App Folder root (paginated). */
-	async listAppRootFolders(): Promise<OneDriveItem[]> {
+	/**
+	 * List immediate folders of a given path (relative to the App Folder root).
+	 * If path is "", it lists folders directly under the App Folder root.
+	 * Returns `{ name: string, path: string }[]`.
+	 */
+	async listFolders(path: string): Promise<{ name: string; path: string }[]> {
 		const folders: OneDriveItem[] = [];
-		// Drain @odata.nextLink: Graph pages /children (~200/page), so a single GET
-		// would silently truncate the folder list shown in the picker modal.
-		let url: string | undefined = `${GRAPH_API}/me/drive/special/approot/children`;
+		const cleanPath = path.trim();
+		let url: string | undefined = cleanPath
+			? `${GRAPH_API}/me/drive/special/approot:/${encodeRelPath(cleanPath)}:/children`
+			: `${GRAPH_API}/me/drive/special/approot/children`;
+
 		for (let guard = 0; url; guard++) {
 			if (guard >= LIST_PAGE_CAP) {
-				throw new Error(`listAppRootFolders: pagination exceeded ${LIST_PAGE_CAP} pages`);
+				throw new Error(`listFolders: pagination exceeded ${LIST_PAGE_CAP} pages`);
 			}
-			const res: OneDriveChildrenResponse = await this.json<OneDriveChildrenResponse>("listAppRootFolders", url, "GET");
+			const res: OneDriveChildrenResponse = await this.json<OneDriveChildrenResponse>("listFolders", url, "GET");
 			for (const item of res.value) {
 				if (item.folder) folders.push(item);
 			}
 			url = res["@odata.nextLink"];
 		}
-		return folders;
+
+		return folders.map((item) => {
+			const itemPath = cleanPath ? `${cleanPath}/${item.name}` : item.name;
+			return {
+				name: item.name || "",
+				path: itemPath,
+			};
+		});
 	}
 
 	/** Get the App Folder root item (its id is the anchor for find-or-create). */

@@ -1,6 +1,6 @@
-# Contributing to Air Sync
+# Contributing to VaultBridge
 
-Thanks for your interest in improving Air Sync! This guide covers how to report
+Thanks for your interest in improving VaultBridge! This guide covers how to report
 issues, set up a development environment, and submit changes.
 
 ## Reporting issues
@@ -8,7 +8,7 @@ issues, set up a development environment, and submit changes.
 - Search [existing issues](https://github.com/takezoh/obsidian-air-sync/issues) first.
 - For bugs, include your Obsidian version, platform (desktop/mobile + OS), the Air
   Sync version, clear steps to reproduce, and what you expected vs. what happened.
-- For sync problems, enable logging (**Settings → Air Sync → Advanced → Enable
+- For sync problems, enable logging (**Settings → VaultBridge → Advanced → Enable
   logging**) and attach the relevant lines from `.airsync/` in your vault.
 - For security vulnerabilities, please **do not** open a public issue — see
   [Security](#security).
@@ -30,9 +30,9 @@ npm run dev      # esbuild watch — rebuilds main.js on change
 
 To try your build in Obsidian, use a **throwaway test vault**, not your real one:
 
-1. Create the plugin folder `<vault>/.obsidian/plugins/air-sync/`.
+1. Create the plugin folder `<vault>/.obsidian/plugins/vaultbridge/`.
 2. Copy (or symlink) the build output into it: `main.js`, `manifest.json`, `styles.css`.
-3. Enable **Air Sync** under Settings → Community plugins, and reload after rebuilds.
+3. Enable **VaultBridge** under Settings → Community plugins, and reload after rebuilds.
 
 `npm run dev` produces a watch build with inline sourcemaps; `npm run build` produces
 a minified production `main.js`. No environment variables are required to build.
@@ -94,7 +94,7 @@ build provenance. The full procedure is documented in the Releases section of
 
 ## Security
 
-Air Sync stores OAuth tokens in Obsidian's secret storage. If you discover a security
+VaultBridge stores OAuth tokens in Obsidian's secret storage. If you discover a security
 vulnerability, please report it privately — **do not** open a public issue. Use the
 **Report a vulnerability** button on the repository's
 [Security tab](https://github.com/takezoh/obsidian-air-sync/security); if private

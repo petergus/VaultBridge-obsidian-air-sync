@@ -21,7 +21,7 @@ export interface PkceTokenManager extends BaseOAuthTokenManager {
 
 /**
  * Shared in-plugin Authorization-Code + PKCE auth provider, worker-less: the code
- * returns directly via the `obsidian://air-sync-auth` deep link and is exchanged for
+ * returns directly via the `obsidian://vaultbridge-auth` deep link and is exchanged for
  * tokens with the ephemeral `code_verifier`. Every part that is identical across the
  * App-Folder PKCE backends (Dropbox, OneDrive) lives here — the lazy/shared and
  * detached token managers, CSRF-state generation and strict validation, the
@@ -85,7 +85,7 @@ export abstract class PkceAuthProvider<TAuth extends PkceTokenManager> implement
 		const codeVerifier = generateRandomString(64);
 		const codeChallenge = await computeS256Challenge(codeVerifier);
 		// base64url state (URL-transit safe); it returns through the
-		// obsidian://air-sync-auth deep link and is validated in completeAuth.
+		// obsidian://vaultbridge-auth deep link and is validated in completeAuth.
 		const state = buildOAuthState();
 		const customClientId = (backendData.customClientId as string) || undefined;
 		const clientId = customClientId || this.clientId;

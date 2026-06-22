@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Logger, getDeviceName } from "./logger";
 import type { RawFsAdapter } from "../fs/raw-fs";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
 
 function createMockAdapter(): RawFsAdapter & {
@@ -26,13 +26,13 @@ function createMockAdapter(): RawFsAdapter & {
 	};
 }
 
-function createSettings(overrides: Partial<AirSyncSettings> = {}): AirSyncSettings {
+function createSettings(overrides: Partial<VaultBridgeSettings> = {}): VaultBridgeSettings {
 	return { ...DEFAULT_SETTINGS, enableLogging: true, ...overrides };
 }
 
 describe("Logger", () => {
 	let adapter: ReturnType<typeof createMockAdapter>;
-	let settings: AirSyncSettings;
+	let settings: VaultBridgeSettings;
 	let logger: Logger;
 
 	beforeEach(() => {

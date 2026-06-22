@@ -9,7 +9,7 @@
 | `auto_merge` | Try a 3-way merge; if the file is ineligible, the base content is missing, or the merge throws, fall back to newer-wins. Two narrower cases produce a duplicate: within newer-wins, equal or unknown mtimes with differing content; and for `.json`/`.canvas`, a merge that produced conflict markers or invalid JSON. |
 | `duplicate` | Delete-aware (see below). When both sides exist, save remote as a `.conflict` file and keep local at the original path. |
 
-The setting is stored as `conflictStrategy` in `AirSyncSettings` (values `auto_merge` \| `duplicate`).
+The setting is stored as `conflictStrategy` in `VaultBridgeSettings` (values `auto_merge` \| `duplicate`).
 
 > NOTE: an interactive `ask` strategy existed in an earlier version. It was removed (it always fell back to `duplicate` anyway). A vault saved while it was selected is normalized to `duplicate` on load (`normalizeConflictStrategy` in `settings-normalize.ts`).
 

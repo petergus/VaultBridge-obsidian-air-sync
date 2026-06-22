@@ -1,7 +1,7 @@
 import type { App } from "obsidian";
 import type { IFileSystem } from "../interface";
 import type { IBackendSettingsRenderer } from "../settings-renderer";
-import type { AirSyncSettings } from "../../settings";
+import type { VaultBridgeSettings } from "../../settings";
 import type { Logger } from "../../logging/logger";
 import type { ErrorClassification } from "../errors";
 import type { RemoteVaultResolution } from "../remote-vault-contract";
@@ -91,7 +91,7 @@ export class OneDriveProvider extends PkceAppFolderProvider<OneDriveBackendData,
 	 */
 	async resolveRemoteVault(
 		_app: App,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		vaultName: string,
 		logger?: Logger,
 	): Promise<RemoteVaultResolution> {
@@ -117,14 +117,14 @@ export class OneDriveProvider extends PkceAppFolderProvider<OneDriveBackendData,
 	 * path is not stored — this reflects the folder's live location. Returns the
 	 * parent path + name, or just the name, or null if not bound.
 	 */
-	async getRemoteVaultDisplayPath(settings: AirSyncSettings, logger?: Logger): Promise<string | null> {
+	async getRemoteVaultDisplayPath(settings: VaultBridgeSettings, logger?: Logger): Promise<string | null> {
 		const data = this.getData(settings);
 		if (!data.remoteVaultFolderId) return null;
 		const client = this.makeDetachedClient(data, logger);
 		const item = await client.getItem(data.remoteVaultFolderId);
 		const parentPath = item.parentReference?.path;
 		if (parentPath) {
-			// e.g. "/drive/root:/Apps/Air Sync" → strip the Graph prefix, append the name.
+			// e.g. "/drive/root:/Apps/VaultBridge" → strip the Graph prefix, append the name.
 			const after = parentPath.split(":").pop() ?? "";
 			return `${after}/${item.name}`;
 		}

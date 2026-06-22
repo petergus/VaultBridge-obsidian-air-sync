@@ -365,6 +365,71 @@ describe("collectChanges — temperature selection", () => {
 		});
 	});
 
+	// Excluded paths must be dropped at the SOURCE — before any per-path remote
+	// stat() or content-read enrichment. The regression this guards: an ignored
+	// file identical on both sides has no sync record (it must not sync), so without
+	// source exclusion it re-enters detection every cycle and is re-read + re-hashed
+	// by enrichHashesForInitialMatch forever (the mobile battery drain).
+	describe("exclusion at source", () => {
+		const excludeIgnored = (p: string) => p.startsWith("ignored/");
+
+		it("drops an excluded both-sides file in cold mode (no record → would churn)", async () => {
+			addFile(localFs, "keep.md", "hello", 1000);
+			addFile(localFs, "ignored/workspace.json", "x", 1000);
+			addFile(remoteFs, "ignored/workspace.json", "x", 1000);
+
+			const result = await collectChanges({ ...makeDeps(), isExcluded: excludeIgnored });
+
+			const paths = result.entries.map((e) => e.path);
+			expect(paths).toContain("keep.md");
+			expect(paths).not.toContain("ignored/workspace.json");
+		});
+
+		it("drops an excluded new local file in warm mode without remote-stat'ing it", async () => {
+			await stateStore.put(makeRecord("existing.md"));
+			addFile(localFs, "existing.md", "content", 1000);
+			addFile(localFs, "ignored/app.json", "x", 2000); // new, no record
+			const statSpy = vi.spyOn(remoteFs, "stat");
+
+			const result = await collectChanges({ ...makeDeps(), isExcluded: excludeIgnored });
+
+			expect(result.temperature).toBe("warm");
+			expect(result.entries.map((e) => e.path)).not.toContain("ignored/app.json");
+			// The whole point: no network stat for the excluded path.
+			expect(statSpy).not.toHaveBeenCalledWith("ignored/app.json");
+		});
+
+		it("drops an excluded dirty path in hot mode", async () => {
+			await stateStore.put(makeRecord("note.md", { localMtime: 500 }));
+			addFile(localFs, "note.md", "changed", 2000);
+			addFile(localFs, "ignored/app.json", "x", 2000);
+			localTracker.acknowledge(localTracker.snapshot()); // initialize
+			localTracker.markDirty("note.md");
+			localTracker.markDirty("ignored/app.json");
+
+			const result = await collectChanges({ ...makeDeps(), isExcluded: excludeIgnored });
+
+			expect(result.temperature).toBe("hot");
+			const paths = result.entries.map((e) => e.path);
+			expect(paths).toContain("note.md");
+			expect(paths).not.toContain("ignored/app.json");
+		});
+
+		it("does not enrich (read + hash) an excluded identical file", async () => {
+			const content = "identical content";
+			const contentBuf = new TextEncoder().encode(content);
+			const expectedMd5 = md5(contentBuf.buffer);
+			addFile(localFs, "ignored/data.json", content, 1000);
+			addFileWithChecksum(remoteFs, "ignored/data.json", content, 2000, { algo: "md5", value: expectedMd5 });
+			const readSpy = vi.spyOn(localFs, "read");
+
+			const result = await collectChanges({ ...makeDeps(), isExcluded: excludeIgnored });
+
+			expect(result.entries).toHaveLength(0);
+			expect(readSpy).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("checkpoint capability absent or getChangedPaths returning null", () => {
 		it("warm mode falls back gracefully when the checkpoint capability is absent", async () => {
 			await stateStore.put(makeRecord("a.md", { localMtime: 500 }));

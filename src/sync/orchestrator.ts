@@ -1,4 +1,4 @@
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type { IFileSystem } from "../fs/interface";
 import type { IBackendProvider } from "../fs/backend";
 import type { Logger } from "../logging/logger";
@@ -23,7 +23,7 @@ import type { SyncCycleResult } from "./sync-notification";
 export type { SyncStatus };
 
 export interface SyncOrchestratorDeps {
-	getSettings: () => AirSyncSettings;
+	getSettings: () => VaultBridgeSettings;
 	saveSettings: () => Promise<void>;
 	localFs: () => IFileSystem | null;
 	remoteFs: () => IFileSystem | null;
@@ -41,6 +41,8 @@ export interface SyncOrchestratorDeps {
 	logger?: Logger;
 	/** Persist a cycle's resolved conflicts to the audit history (once per cycle). */
 	recordConflicts?: (records: ConflictRecord[]) => Promise<void>;
+	/** Update the active conflict tracker dashboard file (sync-conflicts.md). */
+	updateConflictTracker?: (newConflictPaths: string[]) => Promise<void>;
 }
 
 const MAX_RETRIES = 3;
@@ -105,6 +107,8 @@ export class SyncOrchestrator {
 		// hides it; excluding it here keeps the exclusion symmetric (otherwise a
 		// local copy would be pushed, then deleted as a phantom remote deletion).
 		if (path === INTERNAL_METADATA_PATH) return true;
+		// Exclude conflict tracker index
+		if (path === "sync-conflicts.md") return true;
 		// OS-generated junk (desktop.ini, thumbs.db, .DS_Store) is never synced on any
 		// backend — treated as non-existent like the reserved metadata path. Beyond
 		// being noise, some backends (Dropbox) reject these outright, which would
@@ -212,6 +216,12 @@ export class SyncOrchestrator {
 						this.deps.getSettings().conflictStrategy, this.sessionId, new Date().toISOString()))
 						?.catch((err) => this.deps.logger?.warn("Failed to record conflict history", { message: err instanceof Error ? err.message : String(err) }));
 				}
+				const mergedConflictPaths = conflictRecords
+					.filter(c => c.resolution.action === "merged" && c.resolution.hasConflictMarkers)
+					.map(c => c.action.path);
+				await this.deps.updateConflictTracker?.(mergedConflictPaths)
+					?.catch((err) => this.deps.logger?.warn("Failed to update conflict tracker", { message: err instanceof Error ? err.message : String(err) }));
+
 				await this.deps.logger?.flush();
 
 				this.deps.localTracker.acknowledge(snapshot);
@@ -333,6 +343,10 @@ export class SyncOrchestrator {
 			remoteFs,
 			stateStore: this.stateStore,
 			changes: snapshot,
+			// Exclude at the source so ignored files are never stat()'d or content-read
+			// (enrichment) — see ChangeDetectorDeps.isExcluded. The post-detection
+			// filter below now only carries the mobile file-size cap.
+			isExcluded: (path) => this.isExcluded(path),
 		}, { forceFullScan });
 
 		const { renamePairs, folderRenamePairs } = snapshot;
@@ -363,15 +377,14 @@ export class SyncOrchestrator {
 			this.deps.logger?.debug("Rename entry details", { entries: rpEntries });
 		}
 
+		// Exclusion now happens at detection (collectChanges' isExcluded); this filter
+		// carries only the mobile file-size cap, applied after detection so an
+		// oversized file still gets a record-aware decision rather than vanishing.
 		const isMobile = this.deps.isMobile();
 		const maxBytes = settings.mobileMaxFileSizeMB * 1024 * 1024;
-		const filtered = changeSet.entries.filter((e) => {
-			if (this.isExcluded(e.path)) return false;
-			if (isMobile) {
-				const size = Math.max(e.local?.size ?? 0, e.remote?.size ?? 0);
-				if (size > maxBytes) return false;
-			}
-			return true;
+		const filtered = !isMobile ? changeSet.entries : changeSet.entries.filter((e) => {
+			const size = Math.max(e.local?.size ?? 0, e.remote?.size ?? 0);
+			return size <= maxBytes;
 		});
 
 		if (filtered.length !== changeSet.entries.length) {

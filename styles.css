@@ -1,24 +1,24 @@
 /* Air Sync — Conflict modal styles */
-.air-sync-conflict-desc {
+.vaultbridge-conflict-desc {
 	margin-bottom: 12px;
 }
 
-.air-sync-conflict-info {
+.vaultbridge-conflict-info {
 	margin: 4px 0;
 	font-size: 0.9em;
 	color: var(--text-muted);
 }
 
-.air-sync-conflict-info strong {
+.vaultbridge-conflict-info strong {
 	color: var(--text-normal);
 }
 
 /* Conflict summary modal styles */
-.air-sync-summary-desc {
+.vaultbridge-summary-desc {
 	margin-bottom: 12px;
 }
 
-.air-sync-summary-list {
+.vaultbridge-summary-list {
 	max-height: 200px;
 	overflow-y: auto;
 	margin: 8px 0;
@@ -27,20 +27,45 @@
 	color: var(--text-muted);
 }
 
-.air-sync-summary-more {
+.vaultbridge-summary-more {
 	font-style: italic;
 }
 
 /* Connection status indicators */
-.air-sync-status-connected .setting-item-description {
+.vaultbridge-status-connected .setting-item-description {
 	color: var(--color-green);
 	font-weight: 500;
 }
 
-.air-sync-status-partial .setting-item-description {
+.vaultbridge-status-partial .setting-item-description {
 	color: var(--color-yellow);
 }
 
-.air-sync-status-disconnected .setting-item-description {
+.vaultbridge-status-disconnected .setting-item-description {
 	color: var(--text-muted);
+}
+
+/* Sync conflicts settings panel */
+.sync-conflicts-alert-box {
+	background-color: var(--background-modifier-error-hover);
+	border: 1px solid var(--border-color-error);
+	border-radius: 6px;
+	padding: 16px;
+	margin-bottom: 24px;
+}
+
+.sync-conflicts-alert-box ul {
+	margin: 12px 0 0 20px;
+	padding: 0;
+}
+
+.sync-conflicts-alert-box li {
+	margin-bottom: 6px;
+}
+
+.sync-conflicts-alert-box a {
+	color: var(--text-accent);
+	text-decoration: underline;
+	cursor: pointer;
+	font-weight: 500;
 }

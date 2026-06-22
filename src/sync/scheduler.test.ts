@@ -406,6 +406,86 @@ describe("SyncScheduler", () => {
 		});
 	});
 
+	// Battery: a genuine return normally re-checks the remote, but on mobile the
+	// app is backgrounded/resumed constantly — each resume would wake the radio for
+	// a remote delta fetch. A 60s cooldown throttles foreground re-checks WITHOUT
+	// dropping a return (departed survives a throttle, so the first return after the
+	// window still syncs). Local edits are unaffected (debounced vault-change path).
+	describe("foreground-sync cooldown (battery)", () => {
+		it("throttles a second resume within the cooldown window", () => {
+			fireBlur();
+			fireFocus(); // first return → syncs
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+
+			fireBlur(); // re-depart almost immediately
+			fireFocus(); // within 60s → throttled
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+		});
+
+		it("allows a resume once the cooldown window has elapsed", () => {
+			fireBlur();
+			fireFocus(); // syncs
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+
+			vi.advanceTimersByTime(60_000);
+			fireBlur();
+			fireFocus(); // window elapsed → syncs again
+			expect(deps.runSync).toHaveBeenCalledTimes(2);
+		});
+
+		it("keeps departed set through a throttle, so the post-window return still syncs", () => {
+			fireBlur();
+			fireFocus(); // syncs (1)
+			fireBlur();
+			fireFocus(); // throttled — but must NOT clear departed
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+
+			vi.advanceTimersByTime(60_000);
+			fireFocus(); // no new departure needed: departed survived the throttle
+			expect(deps.runSync).toHaveBeenCalledTimes(2);
+		});
+
+		it("does not throttle the network (online) re-check path", () => {
+			const online = windowListeners.get("online")!;
+			fireBlur();
+			fireFocus(); // foreground sync (1)
+			online(new Event("online")); // network restore is not foreground-throttled
+			expect(deps.runSync).toHaveBeenCalledTimes(2);
+		});
+
+		it("re-checks on every resume when the cooldown is disabled (0)", () => {
+			scheduler.destroy();
+			deps = createDeps({ cooldownMs: () => 0 });
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			fireBlur();
+			fireFocus(); // 1
+			fireBlur();
+			fireFocus(); // no throttle → 2
+			expect(deps.runSync).toHaveBeenCalledTimes(2);
+		});
+
+		it("honors a custom cooldown duration", () => {
+			scheduler.destroy();
+			deps = createDeps({ cooldownMs: () => 10_000 }); // 10s
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			fireBlur();
+			fireFocus(); // 1
+			vi.advanceTimersByTime(5_000); // still inside 10s window
+			fireBlur();
+			fireFocus(); // throttled
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+
+			vi.advanceTimersByTime(5_000); // now past 10s
+			fireBlur();
+			fireFocus(); // allowed
+			expect(deps.runSync).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	// The asymmetry that IS the trigger classification (ADR 0004): a signal
 	// (focus/online/visibility) is a content-less "re-check everything" request,
 	// so it is dropped while a sync is already in flight — the in-flight cycle

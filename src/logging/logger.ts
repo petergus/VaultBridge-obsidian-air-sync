@@ -1,4 +1,4 @@
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type { RawFsAdapter } from "../fs/raw-fs";
 import { ensureDir } from "../fs/raw-fs";
 
@@ -39,11 +39,11 @@ export class Logger {
 	private buffer: string[] = [];
 	private _deviceName: string;
 	private _adapter: RawFsAdapter;
-	private getSettings: () => AirSyncSettings;
+	private getSettings: () => VaultBridgeSettings;
 
 	constructor(
 		adapter: RawFsAdapter,
-		getSettings: () => AirSyncSettings,
+		getSettings: () => VaultBridgeSettings,
 		deviceName: string,
 	) {
 		this._adapter = adapter;
@@ -88,9 +88,9 @@ export class Logger {
 			: level === "warn" ? console.warn
 			: console.debug;
 		if (context) {
-			consoleFn(`Air Sync: ${message}`, context);
+			consoleFn(`VaultBridge: ${message}`, context);
 		} else {
-			consoleFn(`Air Sync: ${message}`);
+			consoleFn(`VaultBridge: ${message}`);
 		}
 	}
 

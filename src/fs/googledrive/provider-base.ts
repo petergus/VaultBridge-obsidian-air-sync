@@ -3,7 +3,7 @@ import { Platform } from "obsidian";
 import type { IBackendProvider, WebFolderPicker } from "../backend";
 import type { ISecretStore } from "../secret-store";
 import type { IFileSystem } from "../interface";
-import type { AirSyncSettings } from "../../settings";
+import type { VaultBridgeSettings } from "../../settings";
 import type { Logger } from "../../logging/logger";
 import type { RemoteVaultResolution } from "../remote-vault-contract";
 import type { IGoogleAuth } from "./auth";
@@ -78,20 +78,20 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 
 	/** A client on the SHARED auth (persists refreshes). Safe during init/rebind, which
 	 *  BackendManager gates with `connecting` so no sync runs concurrently. */
-	protected makeClient(settings: AirSyncSettings, logger?: Logger): GoogleDriveClient {
+	protected makeClient(settings: VaultBridgeSettings, logger?: Logger): GoogleDriveClient {
 		const data = this.getData(settings);
 		return this.clientFor(this.auth.getOrCreateGoogleAuth(data, logger), data, logger);
 	}
 
 	/** A client on a FRESH, unshared auth — for one-off settings reads that must not
 	 *  reset the live sync's in-memory tokens. */
-	protected makeDetachedClient(settings: AirSyncSettings, logger?: Logger): GoogleDriveClient {
+	protected makeDetachedClient(settings: VaultBridgeSettings, logger?: Logger): GoogleDriveClient {
 		const data = this.getData(settings);
 		return this.clientFor(this.auth.createDetachedGoogleAuth(data, logger), data, logger);
 	}
 
 	/** Open the per-target IndexedDB cache store, or null if no folder is bound. */
-	private metadataStoreFor(settings: AirSyncSettings): MetadataStore<GoogleDriveFile> | null {
+	private metadataStoreFor(settings: VaultBridgeSettings): MetadataStore<GoogleDriveFile> | null {
 		const data = this.getData(settings);
 		if (!data.remoteVaultFolderId) return null;
 		return new MetadataStore<GoogleDriveFile>(`${settings.vaultId}-${data.remoteVaultFolderId}`, {
@@ -100,7 +100,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		});
 	}
 
-	createFs(app: App, settings: AirSyncSettings, logger?: Logger): IFileSystem | null {
+	createFs(app: App, settings: VaultBridgeSettings, logger?: Logger): IFileSystem | null {
 		const data = this.getData(settings);
 		const tokens = readGoogleDriveTokens(this.secretStore, this.type);
 		if (!tokens.refreshToken || !data.remoteVaultFolderId) return null;
@@ -111,11 +111,11 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		return new GoogleDriveFs(client, data.remoteVaultFolderId, logger, this.metadataStoreFor(settings) ?? undefined);
 	}
 
-	isConnected(settings: AirSyncSettings): boolean {
+	isConnected(settings: VaultBridgeSettings): boolean {
 		return hasBackendSecret(this.secretStore, this.type, "refresh") && !!this.getData(settings).remoteVaultFolderId;
 	}
 
-	getIdentity(settings: AirSyncSettings): string | null {
+	getIdentity(settings: VaultBridgeSettings): string | null {
 		const data = this.getData(settings);
 		if (!data.remoteVaultFolderId) return null;
 		return `${this.type}:${data.remoteVaultFolderId}`;
@@ -148,7 +148,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 	 */
 	async resolveRemoteVault(
 		app: App,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		vaultName: string,
 		logger?: Logger,
 	): Promise<RemoteVaultResolution> {
@@ -174,7 +174,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 	 * `obsidian://air-sync-folder` and is bound by {@link completeWebFolderPick}.
 	 * Returns the CSRF state to persist.
 	 */
-	async startWebFolderPick(settings: AirSyncSettings): Promise<Record<string, unknown>> {
+	async startWebFolderPick(settings: VaultBridgeSettings): Promise<Record<string, unknown>> {
 		// Auth-only gate (not isConnected): the picker needs a token, but it is also how
 		// a folder gets bound in the first place, so it must be openable before any
 		// remoteVaultFolderId exists.
@@ -210,7 +210,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 	 */
 	async completeWebFolderPick(
 		params: Record<string, string | undefined>,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		logger?: Logger,
 	): Promise<RemoteVaultResolution> {
 		const data = this.getData(settings);
@@ -236,7 +236,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 			if (isHttpError(err, 404) || isHttpError(err, 403)) {
 				logger?.warn("Picked Google Drive folder is not accessible under the granted scope", { id });
 				throw new Error(
-					"That folder isn't accessible to Air Sync. Re-pick it in the Google Picker so access is granted.",
+					"That folder isn't accessible to VaultBridge. Re-pick it in the Google Picker so access is granted.",
 				);
 			}
 			throw err;
@@ -263,7 +263,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 	 * may be truncated with a leading "…/" (see resolveFolderPath). Returns null
 	 * if not bound.
 	 */
-	async getRemoteVaultDisplayPath(settings: AirSyncSettings, logger?: Logger): Promise<string | null> {
+	async getRemoteVaultDisplayPath(settings: VaultBridgeSettings, logger?: Logger): Promise<string | null> {
 		const data = this.getData(settings);
 		if (!data.remoteVaultFolderId) return null;
 		// Detached client so this UI read can't reset the live sync's shared tokens.
@@ -271,7 +271,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		return resolveFolderPath(client, data.remoteVaultFolderId, logger);
 	}
 
-	async disconnect(_settings: AirSyncSettings): Promise<Record<string, unknown>> {
+	async disconnect(_settings: VaultBridgeSettings): Promise<Record<string, unknown>> {
 		await this.auth.revokeAuth();
 		this.clearPluginSecrets();
 		// The per-target IndexedDB cache + cursor is cleared by BackendManager via the
@@ -284,7 +284,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 	 * (used by disconnect when the backend had no live FS — e.g. expired auth — so
 	 * no stale checkpoint survives). Best-effort: a failure must not block disconnect.
 	 */
-	async clearCheckpointStore(settings: AirSyncSettings): Promise<void> {
+	async clearCheckpointStore(settings: VaultBridgeSettings): Promise<void> {
 		const store = this.metadataStoreFor(settings);
 		if (!store) return;
 		try {
@@ -300,6 +300,6 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		clearBackendSecrets(this.secretStore, this.type, GOOGLE_DRIVE_SECRET_NAMES);
 	}
 
-	protected abstract getData(settings: AirSyncSettings): GoogleDriveBackendData;
+	protected abstract getData(settings: VaultBridgeSettings): GoogleDriveBackendData;
 	protected abstract getDefaultData(): GoogleDriveBackendData;
 }

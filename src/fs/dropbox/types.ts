@@ -2,7 +2,7 @@ import type { FileEntity } from "../types";
 import { AuthError } from "../errors";
 
 /**
- * A Dropbox file/folder metadata entry (the subset Air Sync uses).
+ * A Dropbox file/folder metadata entry (the subset VaultBridge uses).
  *
  * Dropbox is path-addressed: `path_display` preserves the user's casing while
  * `path_lower` is the case-folded form used for matching (Dropbox is

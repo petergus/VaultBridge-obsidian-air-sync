@@ -1,5 +1,5 @@
 import type { App } from "obsidian";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type { IFileSystem } from "./interface";
 import type { IBackendProvider } from "./backend";
 import type { Logger } from "../logging/logger";
@@ -7,7 +7,7 @@ import { getBackendProvider, getAllBackendProviders } from "./registry";
 import { AuthError } from "./errors";
 
 export interface BackendManagerDeps {
-	getSettings: () => AirSyncSettings;
+	getSettings: () => VaultBridgeSettings;
 	saveSettings: () => Promise<void>;
 	getApp: () => App;
 	getLogger: () => Logger;
@@ -329,7 +329,7 @@ export class BackendManager {
 	 * one — it clears by settings key instead. The checkpoint clear is best-effort (logged,
 	 * not thrown); the baseline clear, in contrast, propagates so a failure is surfaced.
 	 */
-	private async resetAll(settings: AirSyncSettings): Promise<void> {
+	private async resetAll(settings: VaultBridgeSettings): Promise<void> {
 		if (this.remoteFs) {
 			await this.remoteFs.checkpoint?.resetCheckpoint().catch((e: unknown) => {
 				this.deps.getLogger().warn("Failed to clear checkpoint store", {

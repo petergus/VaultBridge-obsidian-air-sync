@@ -116,7 +116,7 @@ Two OAuth implementations share a common base class (`GoogleAuthBase`). The serv
 
 - Redirects to Google OAuth with `redirect_uri = https://auth-airsync.takezo.dev/google/callback`, `client_id` = the built-in public client ID, `access_type=offline`, and `prompt=consent`
 - Auth server exchanges the code for tokens (confidential client with `client_secret`)
-- Plugin receives tokens via `obsidian://air-sync-auth?access_token=...&refresh_token=...`
+- Plugin receives tokens via `obsidian://vaultbridge-auth?access_token=...&refresh_token=...`
 - Token refresh: POST `https://auth-airsync.takezo.dev/google/token/refresh` with JSON body `{ refresh_token }`
 - Scope: `drive.file` (app-created files only)
 

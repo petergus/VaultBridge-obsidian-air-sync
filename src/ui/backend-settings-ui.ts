@@ -1,12 +1,12 @@
 import { Setting } from "obsidian";
 import type { App, TextComponent } from "obsidian";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type { BackendConnectionActions } from "../fs/settings-renderer";
 import { AppFolderPickerModal, type AppFolderPickerProvider } from "./app-folder-picker";
 
 /**
  * Render the shared "Connection status" row: a ●-prefixed status line (colored via
- * the `air-sync-status-connected`/`-disconnected` classes) plus a Connect/Disconnect
+ * the `vaultbridge-status-connected`/`-disconnected` classes) plus a Connect/Disconnect
  * button. Used by every backend renderer.
  *
  * `onConnect` overrides the default `startAuth` for backends that must guard first
@@ -26,7 +26,7 @@ export function renderConnectionStatus(
 	const setting = new Setting(containerEl)
 		.setName("Connection status")
 		.setDesc(connected ? "● Connected" : "● Not connected");
-	setting.settingEl.addClass(connected ? "air-sync-status-connected" : "air-sync-status-disconnected");
+	setting.settingEl.addClass(connected ? "vaultbridge-status-connected" : "vaultbridge-status-disconnected");
 	setting.addButton((button) =>
 		button
 			.setButtonText(connected ? "Disconnect" : connectLabel)
@@ -77,7 +77,7 @@ export function renderUnboundAppFolderField(
 	folderSetting: Setting,
 	opts: {
 		app: App;
-		settings: AirSyncSettings;
+		settings: VaultBridgeSettings;
 		provider: AppFolderPickerProvider | undefined;
 		defaultLabel: string;
 		modalTitle: string;

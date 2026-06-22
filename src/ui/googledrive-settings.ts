@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { Notice, SecretComponent, Setting } from "obsidian";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type {
 	BackendConnectionActions,
 	IBackendSettingsRenderer,
@@ -22,7 +22,7 @@ export class GoogleDriveSettingsRenderer implements IBackendSettingsRenderer {
 
 	render(
 		containerEl: HTMLElement,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		_onSave: (updates: Record<string, unknown>) => Promise<void>,
 		actions: BackendConnectionActions,
 		app: App,
@@ -86,7 +86,7 @@ export class GoogleDriveCustomSettingsRenderer implements IBackendSettingsRender
 
 	render(
 		containerEl: HTMLElement,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		onSave: (updates: Record<string, unknown>) => Promise<void>,
 		actions: BackendConnectionActions,
 		app: App,

@@ -2,7 +2,7 @@ import type { FileEntity, RemoteChecksum } from "../types";
 import { AuthError } from "../errors";
 
 /**
- * A Microsoft Graph `driveItem` (the subset Air Sync uses).
+ * A Microsoft Graph `driveItem` (the subset VaultBridge uses).
  *
  * OneDrive is id-addressed: every item carries a stable `id`, and references its
  * parent by id (`parentReference.id`) — exactly like Google Drive's `parents[]`.

@@ -1,14 +1,14 @@
-import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
-import type AirSyncPlugin from "../main";
+import { App, Notice, Platform, PluginSettingTab, Setting, TFile } from "obsidian";
+import type VaultBridgePlugin from "../main";
 import type { ConflictStrategy } from "../sync/types";
 import { getAllBackendProviders, getBackendProvider } from "../fs/registry";
 import { getBackendSettingsRenderer } from "./backend-settings";
 import { parseLines } from "../utils/parse-lines";
 
-export class AirSyncSettingTab extends PluginSettingTab {
-	plugin: AirSyncPlugin;
+export class VaultBridgeSettingTab extends PluginSettingTab {
+	plugin: VaultBridgePlugin;
 
-	constructor(app: App, plugin: AirSyncPlugin) {
+	constructor(app: App, plugin: VaultBridgePlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -16,6 +16,36 @@ export class AirSyncSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+
+		// Active conflicts panel
+		const conflictsContainer = containerEl.createDiv("sync-conflicts-settings-container");
+		void this.plugin.conflictTracker.getTrackedPaths().then((paths) => {
+			if (paths.size > 0) {
+				conflictsContainer.empty();
+				
+				const alertEl = conflictsContainer.createDiv("sync-conflicts-alert-box");
+
+				new Setting(alertEl)
+					.setName("Active sync conflicts")
+					.setDesc("Open these files to resolve their conflicts (the remote version is inside a callout).")
+					.setHeading();
+
+				const listEl = alertEl.createEl("ul");
+				for (const path of Array.from(paths).sort()) {
+					const li = listEl.createEl("li");
+					const link = li.createEl("a");
+					link.setText(path);
+					this.plugin.registerDomEvent(link, "click", (e) => {
+						e.preventDefault();
+						const file = this.app.vault.getAbstractFileByPath(path);
+						if (file && file instanceof TFile) {
+							void this.app.workspace.getLeaf().openFile(file);
+							(this.app as unknown as { setting: { close: () => void } }).setting?.close();
+						}
+					});
+				}
+			}
+		});
 
 		new Setting(containerEl).setName("Sync").setHeading();
 
@@ -159,6 +189,26 @@ export class AirSyncSettingTab extends PluginSettingTab {
 						const num = parseFloat(value);
 						if (!isNaN(num) && num > 0) {
 							this.plugin.settings.mobileMaxFileSizeMB = num;
+							await this.plugin.saveSettings();
+						}
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Resume sync cooldown (seconds)")
+			.setDesc(
+				"After a sync, returning to the app won't re-check the cloud again until this many seconds have passed — saves battery on mobile, where the app is reopened often. Edits still sync right away. Set to 0 to always re-check on resume."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("60")
+					.setValue(
+						String(this.plugin.settings.foregroundSyncCooldownSec)
+					)
+					.onChange(async (value) => {
+						const num = parseInt(value, 10);
+						if (!isNaN(num) && num >= 0) {
+							this.plugin.settings.foregroundSyncCooldownSec = num;
 							await this.plugin.saveSettings();
 						}
 					})

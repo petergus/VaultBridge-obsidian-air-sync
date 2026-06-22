@@ -4,7 +4,7 @@
 	"version": "0.1.31",
 	"minAppVersion": "1.11.4",
 	"description": "Sync your vault with cloud storage (Google Drive, OneDrive, Dropbox).",
-	"author": "Takehito Gondo",
+	"author": "Peter Gu",
 	"authorUrl": "https://github.com/takezoh",
 	"isDesktopOnly": false
 }

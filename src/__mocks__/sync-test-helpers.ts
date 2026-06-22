@@ -2,7 +2,7 @@ import type { IFileSystem } from "../fs/interface";
 import type { FileEntity } from "../fs/types";
 import type { RenamePair, SyncRecord } from "../sync/types";
 import type { SyncStateStore } from "../sync/state";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import { sha256 } from "../utils/hash";
 import { normalizeSyncPath, validateRename } from "../utils/path";
 
@@ -335,13 +335,13 @@ export function readText(
 }
 
 /**
- * A complete, type-checked `AirSyncSettings` for tests. Typed so that adding a
+ * A complete, type-checked `VaultBridgeSettings` for tests. Typed so that adding a
  * required settings field breaks compilation here (and at every call site)
  * rather than silently drifting. Override any field via `overrides`.
  */
 export function mockSettings(
-	overrides: Partial<AirSyncSettings> = {},
-): AirSyncSettings {
+	overrides: Partial<VaultBridgeSettings> = {},
+): VaultBridgeSettings {
 	return {
 		vaultId: "test-vault",
 		backendType: "test",
@@ -352,6 +352,7 @@ export function mockSettings(
 		// don't run under a configuration real users never have.
 		enableThreeWayMerge: true,
 		mobileMaxFileSizeMB: 10,
+		foregroundSyncCooldownSec: 60,
 		screenWakeLockOnSync: false,
 		showSyncNotifications: false,
 		enableLogging: false,

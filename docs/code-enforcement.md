@@ -41,7 +41,7 @@ Practical patterns:
 `vi.spyOn` targets or hand-rolling partial objects:
 
 - `spyRequestUrl()` (`src/fs/googledrive/test-helpers.ts`) — type-safe spy on obsidian's `requestUrl`.
-- `mockSettings()` (`src/__mocks__/sync-test-helpers.ts`) — returns a complete `AirSyncSettings` default.
+- `mockSettings()` (`src/__mocks__/sync-test-helpers.ts`) — returns a complete `VaultBridgeSettings` default.
 - `createMockStateStore()` (`src/__mocks__/sync-test-helpers.ts`) — pass it directly; its intersection type satisfies `SyncStateStore`.
 
 ## 2. No `async` without `await`

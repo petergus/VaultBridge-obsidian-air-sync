@@ -2,7 +2,9 @@ import { diffIndices, diff3Merge } from "node-diff3";
 import { getFileExtension } from "../utils/path";
 
 const TEXT_EXTENSIONS = new Set([
-	".md", ".txt", ".json", ".canvas", ".css", ".js", ".ts", ".html", ".xml",
+	// `.canvas` (JSON) and `.base` (YAML) are Obsidian-native text formats — both
+	// 3-way mergeable, so a concurrent edit reconciles instead of blind keep_newer.
+	".md", ".txt", ".json", ".canvas", ".base", ".css", ".js", ".ts", ".html", ".xml",
 	".yaml", ".yml", ".csv", ".svg", ".tex", ".bib", ".org",
 	".rst", ".adoc", ".toml", ".ini", ".cfg", ".conf", ".log",
 	".sh", ".bash", ".zsh", ".fish", ".py", ".rb", ".lua",
@@ -109,7 +111,11 @@ export function threeWayMerge(
 		if (region.ok !== undefined) {
 			lines.push(...region.ok);
 		} else if (region.conflict !== undefined) {
-			lines.push("<<<<<<< LOCAL", ...region.conflict.a, "=======", ...region.conflict.b, ">>>>>>> REMOTE");
+			lines.push(...region.conflict.a);
+			lines.push("> [!sync-conflict] Remote version");
+			for (const line of region.conflict.b) {
+				lines.push(`> ${line}`);
+			}
 		}
 	}
 

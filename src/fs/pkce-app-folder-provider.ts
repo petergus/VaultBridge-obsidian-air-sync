@@ -4,7 +4,7 @@ import type { IBackendProvider } from "./backend";
 import type { ISecretStore } from "./secret-store";
 import type { IFileSystem } from "./interface";
 import type { IBackendSettingsRenderer } from "./settings-renderer";
-import type { AirSyncSettings } from "../settings";
+import type { VaultBridgeSettings } from "../settings";
 import type { Logger } from "../logging/logger";
 import type { RemoteVaultResolution } from "./remote-vault-contract";
 import { MetadataStore } from "../store/metadata-store";
@@ -65,15 +65,15 @@ export abstract class PkceAppFolderProvider<
 	abstract createSettingsRenderer(): IBackendSettingsRenderer;
 	abstract resolveRemoteVault(
 		app: App,
-		settings: AirSyncSettings,
+		settings: VaultBridgeSettings,
 		vaultName: string,
 		logger?: Logger,
 	): Promise<RemoteVaultResolution>;
-	abstract getRemoteVaultDisplayPath(settings: AirSyncSettings, logger?: Logger): Promise<string | null>;
+	abstract getRemoteVaultDisplayPath(settings: VaultBridgeSettings, logger?: Logger): Promise<string | null>;
 
 	// ── Shared plumbing ──
 
-	protected getData(settings: AirSyncSettings): TData {
+	protected getData(settings: VaultBridgeSettings): TData {
 		return { ...this.defaultData, ...getBackendData<TData>(settings) };
 	}
 
@@ -101,12 +101,12 @@ export abstract class PkceAppFolderProvider<
 
 	/** A client usable from the settings UI / folder modal, detached so it can't clobber
 	 *  a concurrently-running sync's tokens. */
-	createUiClient(settings: AirSyncSettings, logger?: Logger): TClient {
+	createUiClient(settings: VaultBridgeSettings, logger?: Logger): TClient {
 		return this.makeDetachedClient(this.getData(settings), logger);
 	}
 
 	/** The per-target checkpoint store (file-map cache + delta cursor), keyed by id. */
-	protected metadataStoreFor(settings: AirSyncSettings): MetadataStore<TFile> | null {
+	protected metadataStoreFor(settings: VaultBridgeSettings): MetadataStore<TFile> | null {
 		const id = this.getData(settings).remoteVaultFolderId;
 		if (!id) return null;
 		return new MetadataStore<TFile>(`${settings.vaultId}-${id}`, { dbNamePrefix: this.dbNamePrefix, version: 1 });
@@ -120,7 +120,7 @@ export abstract class PkceAppFolderProvider<
 		);
 	}
 
-	createFs(_app: App, settings: AirSyncSettings, logger?: Logger): IFileSystem | null {
+	createFs(_app: App, settings: VaultBridgeSettings, logger?: Logger): IFileSystem | null {
 		const data = this.getData(settings);
 		// The folder id is the sole remote address; the FS resolves any path from it.
 		if (!this.hasAnyToken() || !data.remoteVaultFolderId) return null;
@@ -128,11 +128,11 @@ export abstract class PkceAppFolderProvider<
 		return this.createFsInstance(client, data.remoteVaultFolderId, logger, this.metadataStoreFor(settings) ?? undefined);
 	}
 
-	isConnected(settings: AirSyncSettings): boolean {
+	isConnected(settings: VaultBridgeSettings): boolean {
 		return this.hasAnyToken() && !!this.getData(settings).remoteVaultFolderId;
 	}
 
-	getIdentity(settings: AirSyncSettings): string | null {
+	getIdentity(settings: VaultBridgeSettings): string | null {
 		const id = this.getData(settings).remoteVaultFolderId;
 		return id ? `${this.type}:${id}` : null;
 	}
@@ -158,7 +158,7 @@ export abstract class PkceAppFolderProvider<
 	 * by disconnect when the backend had no live FS — e.g. expired auth — so no stale
 	 * checkpoint survives). Best-effort.
 	 */
-	async clearCheckpointStore(settings: AirSyncSettings): Promise<void> {
+	async clearCheckpointStore(settings: VaultBridgeSettings): Promise<void> {
 		const store = this.metadataStoreFor(settings);
 		if (!store) return;
 		try {
@@ -170,7 +170,7 @@ export abstract class PkceAppFolderProvider<
 		}
 	}
 
-	async disconnect(_settings: AirSyncSettings): Promise<Record<string, unknown>> {
+	async disconnect(_settings: VaultBridgeSettings): Promise<Record<string, unknown>> {
 		await this.auth.revokeAuth();
 		this.clearPluginSecrets();
 		// The per-target IndexedDB cache + cursor is cleared by BackendManager via the

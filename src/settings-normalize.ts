@@ -1,4 +1,4 @@
-import type { AirSyncSettings } from "./settings";
+import type { VaultBridgeSettings } from "./settings";
 
 function isObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -28,7 +28,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
  * @returns true if `settings.backendData` was changed (caller should persist).
  */
 export function liftActiveBackendData(
-	settings: AirSyncSettings,
+	settings: VaultBridgeSettings,
 	knownTypes: readonly string[],
 ): boolean {
 	const bag = settings.backendData;
@@ -53,7 +53,7 @@ export function liftActiveBackendData(
  *
  * @returns true if `settings.conflictStrategy` was changed (caller should persist).
  */
-export function normalizeConflictStrategy(settings: AirSyncSettings): boolean {
+export function normalizeConflictStrategy(settings: VaultBridgeSettings): boolean {
 	const strategy = settings.conflictStrategy as string;
 	if (strategy === "auto_merge" || strategy === "duplicate") return false;
 	settings.conflictStrategy = strategy === "ask" ? "duplicate" : "auto_merge";
