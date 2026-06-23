@@ -104,6 +104,46 @@ describe("LocalFs", () => {
 		});
 	});
 
+	describe("delete (normal paths)", () => {
+		it("deletes a normal file via trashFile when present in the index", async () => {
+			const { app, vault, fs } = createLocalFs();
+			await fs.write("notes/test.md", new TextEncoder().encode("hi").buffer, 123);
+			const trashSpy = vi.spyOn(app.fileManager, "trashFile");
+
+			await fs.delete("notes/test.md");
+
+			expect(trashSpy).toHaveBeenCalled();
+			expect(await vault.adapter.exists("notes/test.md")).toBe(false);
+		});
+
+		it("falls back to adapter.remove if trashFile silently no-ops (simulating mobile System Trash bug)", async () => {
+			const { app, vault, fs } = createLocalFs();
+			await fs.write("notes/test.md", new TextEncoder().encode("hi").buffer, 123);
+			// Make trashFile a no-op so the file still exists on disk after it runs
+			vi.spyOn(app.fileManager, "trashFile").mockResolvedValue(undefined);
+			const removeSpy = vi.spyOn(vault.adapter, "remove");
+
+			await fs.delete("notes/test.md");
+
+			// Even though trashFile was called (and no-oped), we fall back and delete via adapter
+			expect(removeSpy).toHaveBeenCalledWith("notes/test.md");
+			expect(await vault.adapter.exists("notes/test.md")).toBe(false);
+		});
+
+		it("deletes file directly via adapter.remove if it exists on disk but is missing from the index (unindexed)", async () => {
+			const { vault, fs } = createLocalFs();
+			// Write file directly to adapter so it's not in the vault index
+			await vault.adapter.writeBinary("notes/unindexed.md", new TextEncoder().encode("hi").buffer);
+			vi.spyOn(vault, "getAbstractFileByPath").mockReturnValue(null);
+			const removeSpy = vi.spyOn(vault.adapter, "remove");
+
+			await fs.delete("notes/unindexed.md");
+
+			expect(removeSpy).toHaveBeenCalledWith("notes/unindexed.md");
+			expect(await vault.adapter.exists("notes/unindexed.md")).toBe(false);
+		});
+	});
+
 	describe("stat (.airsync paths)", () => {
 		it("returns FileEntity with hash for a .airsync file", async () => {
 			const { vault, fs } = createLocalFs([".airsync"]);

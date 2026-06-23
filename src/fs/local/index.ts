@@ -190,6 +190,27 @@ export class LocalFs implements IFileSystem {
 		const file = this.vault.getAbstractFileByPath(path);
 		if (file) {
 			await this.app.fileManager.trashFile(file);
+			// Verify if the file/folder was actually deleted. On some platforms (like mobile
+			// when "System trash" is selected), trashFile can silently no-op.
+			// Fall back to a permanent delete in that case.
+			if (await this.vault.adapter.exists(path)) {
+				if (file instanceof TFolder) {
+					await this.vault.adapter.rmdir(path, true);
+				} else {
+					await this.vault.adapter.remove(path);
+				}
+			}
+		} else {
+			// Fallback: if the file/folder exists on disk but is not in the index,
+			// delete it directly via the adapter.
+			if (await this.vault.adapter.exists(path)) {
+				const s = await this.vault.adapter.stat(path);
+				if (s?.type === "folder") {
+					await this.vault.adapter.rmdir(path, true);
+				} else {
+					await this.vault.adapter.remove(path);
+				}
+			}
 		}
 	}
 
