@@ -231,6 +231,15 @@ export default tseslint.config(
 		rules: { "max-lines": ["error", { max: 339, skipBlankLines: true, skipComments: true }] },
 	},
 	{
+		// The phased (lane, tier) plan executor + its bounded action-I/O retry. The
+		// genuinely-separable concept (empty-dir pruning) was lifted out to
+		// prune-empty-folders.ts; what remains is cohesive execution machinery, so this
+		// is pinned just over the cap rather than fragmenting a small helper to shave
+		// the last few lines.
+		files: ["src/sync/plan-executor.ts"],
+		rules: { "max-lines": ["error", { max: 309, skipBlankLines: true, skipComments: true }] },
+	},
+	{
 		// Lint manifest.json for the words the Obsidian submission validator
 		// HARD-rejects in name/description/id ("obsidian"/"plugin" — redundant,
 		// implied by context). The typescript-eslint parser turns .json into an

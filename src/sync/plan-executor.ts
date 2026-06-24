@@ -11,6 +11,7 @@ import type { ErrorClassification } from "../fs/errors";
 import { AsyncPool, AdaptivePool } from "../queue/async-queue";
 import type { AdaptivePoolOpts } from "../queue/async-queue";
 import { decideRetry, sleep } from "./error";
+import { pruneEmptyParentFolders } from "./prune-empty-folders";
 
 export interface CompletedAction {
 	action: SyncAction;
@@ -278,8 +279,11 @@ export async function executePlan(
 
 	// ── Phase 4 — empty directory pruning. ──
 	// When files are deleted or moved, their parent directories may become empty.
-	// Walk up and clean them up on both sides.
-	await pruneEmptyParentFolders(result, ctx);
+	// Walk up and clean them up on both sides (see prune-empty-folders.ts).
+	await pruneEmptyParentFolders(
+		result.succeeded.map((s) => s.action),
+		ctx,
+	);
 
 	return result;
 }
@@ -469,53 +473,3 @@ async function executeConflictAction(
 	}
 }
 
-async function pruneEmptyParentFolders(result: ExecutionResult, ctx: ExecutionContext): Promise<void> {
-	const localCleanups = new Set<string>();
-	const remoteCleanups = new Set<string>();
-
-	for (const succeeded of result.succeeded) {
-		const action = succeeded.action;
-		if (action.action === "delete_local" || action.action === "rename_local") {
-			const oldPath = action.action === "rename_local" ? action.oldPath : action.path;
-			if (oldPath) {
-				const parent = oldPath.substring(0, oldPath.lastIndexOf("/"));
-				if (parent) localCleanups.add(parent);
-			}
-		}
-		if (action.action === "delete_remote" || action.action === "rename_remote") {
-			const oldPath = action.action === "rename_remote" ? action.oldPath : action.path;
-			if (oldPath) {
-				const parent = oldPath.substring(0, oldPath.lastIndexOf("/"));
-				if (parent) remoteCleanups.add(parent);
-			}
-		}
-	}
-
-	const prune = async (fs: IFileSystem, folderPath: string) => {
-		let current = folderPath;
-		while (current) {
-			try {
-				const children = await fs.listDir(current);
-				if (children.length === 0) {
-					ctx.logger?.debug(`Pruning empty directory: ${current}`);
-					await fs.delete(current);
-					current = current.substring(0, current.lastIndexOf("/"));
-				} else {
-					break;
-				}
-			} catch (err) {
-				break;
-			}
-		}
-	};
-
-	const sortPaths = (paths: Set<string>) =>
-		Array.from(paths).sort((a, b) => b.split("/").length - a.split("/").length);
-
-	for (const path of sortPaths(localCleanups)) {
-		await prune(ctx.localFs, path);
-	}
-	for (const path of sortPaths(remoteCleanups)) {
-		await prune(ctx.remoteFs, path);
-	}
-}
