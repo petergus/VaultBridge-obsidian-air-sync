@@ -112,8 +112,8 @@ async function collectHot(deps: ChangeDetectorDeps): Promise<ChangeSet> {
 		const prevSync = syncRecords.get(path);
 		return {
 			path,
-			local: local?.isDirectory ? undefined : local,
-			remote: remote?.isDirectory ? undefined : remote,
+			local,
+			remote,
 			prevSync,
 		};
 	});
@@ -153,7 +153,6 @@ async function collectWarm(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 
 	// Compare local listing against sync records
 	for (const file of localFiles) {
-		if (file.isDirectory) continue;
 		const record = recordMap.get(file.path);
 		if (!record || hasChanged(file, record)) {
 			changedPaths.add(file.path);
@@ -161,7 +160,7 @@ async function collectWarm(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 	}
 
 	// Include paths that existed in records but are no longer in local listing (local deletions)
-	const localPathSet = new Set(localFiles.filter((f) => !f.isDirectory).map((f) => f.path));
+	const localPathSet = new Set(localFiles.map((f) => f.path));
 	for (const record of allRecords) {
 		if (!localPathSet.has(record.path)) {
 			changedPaths.add(record.path);
@@ -184,14 +183,14 @@ async function collectWarm(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 	const pathArray = Array.from(changedPaths).filter((p) => !isExcluded(p));
 	const remoteStats = await Promise.all(pathArray.map((p) => remoteFs.stat(p)));
 
-	const localFileMap = new Map(localFiles.filter((f) => !f.isDirectory).map((f) => [f.path, f]));
+	const localFileMap = new Map(localFiles.map((f) => [f.path, f]));
 
 	const entries: MixedEntity[] = pathArray.map((path, i) => {
 		const remote = remoteStats[i] ?? undefined;
 		return {
 			path,
 			local: localFileMap.get(path),
-			remote: remote?.isDirectory ? undefined : remote,
+			remote,
 			prevSync: recordMap.get(path),
 		};
 	});
@@ -221,12 +220,12 @@ async function collectCold(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 	};
 
 	for (const file of localFiles) {
-		if (file.isDirectory || isExcluded(file.path)) continue;
+		if (isExcluded(file.path)) continue;
 		getOrCreate(file.path).local = file;
 	}
 
 	for (const file of remoteFiles) {
-		if (file.isDirectory || isExcluded(file.path)) continue;
+		if (isExcluded(file.path)) continue;
 		getOrCreate(file.path).remote = file;
 	}
 
@@ -336,7 +335,7 @@ async function confirmLocalDeletions(
 			pool.run(async () => {
 				try {
 					const stat = await localFs.stat(entry.path);
-					if (stat && !stat.isDirectory) {
+					if (stat) {
 						entry.local = stat;
 					}
 				} catch {

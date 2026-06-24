@@ -93,7 +93,7 @@ describe("sync converges to a fixed point", () => {
 		addFile(env.localFs, "dir/b.md", "beta", 1000);
 
 		const first = await runCycle(env);
-		expect(actionTypes(first)).toEqual(["push", "push"]);
+		expect(actionTypes(first)).toEqual(["push", "push", "push"]);
 		// Content propagated and baselines recorded.
 		expect(readText(env.remoteFs, "a.md")).toBe("alpha");
 		expect(readText(env.remoteFs, "dir/b.md")).toBe("beta");
@@ -181,7 +181,7 @@ describe("sync converges to a fixed point", () => {
 		addFile(env.localFs, "dir/c.md", "gamma", 1000);
 
 		// Cycle 1: push both files; now in sync at the old folder path.
-		expect(actionTypes(await runCycle(env))).toEqual(["push", "push"]);
+		expect(actionTypes(await runCycle(env))).toEqual(["push", "push", "push"]);
 
 		// The folder is renamed on the remote: move it there and report the rename once.
 		await env.remoteFs.rename("dir", "papers");

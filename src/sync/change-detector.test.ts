@@ -71,16 +71,16 @@ describe("collectChanges — temperature selection", () => {
 			expect(paths).toEqual(["a.md", "b.md"]);
 		});
 
-		it("skips directories", async () => {
+		it("includes directories", async () => {
 			addFile(localFs, "notes/a.md", "hello", 1000);
 			// notes/ directory is auto-created by addFile
 
 			const result = await collectChanges(makeDeps());
 
-			for (const entry of result.entries) {
-				expect(entry.local?.isDirectory ?? false).toBe(false);
-				expect(entry.remote?.isDirectory ?? false).toBe(false);
-			}
+			const paths = result.entries.map((e) => e.path);
+			expect(paths).toContain("notes");
+			const notesEntry = result.entries.find((e) => e.path === "notes");
+			expect(notesEntry?.local?.isDirectory).toBe(true);
 		});
 
 		it("returns empty entries when both sides are empty", async () => {
@@ -371,7 +371,7 @@ describe("collectChanges — temperature selection", () => {
 	// source exclusion it re-enters detection every cycle and is re-read + re-hashed
 	// by enrichHashesForInitialMatch forever (the mobile battery drain).
 	describe("exclusion at source", () => {
-		const excludeIgnored = (p: string) => p.startsWith("ignored/");
+		const excludeIgnored = (p: string) => p === "ignored" || p.startsWith("ignored/");
 
 		it("drops an excluded both-sides file in cold mode (no record → would churn)", async () => {
 			addFile(localFs, "keep.md", "hello", 1000);

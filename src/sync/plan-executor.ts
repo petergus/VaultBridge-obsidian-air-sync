@@ -276,6 +276,11 @@ export async function executePlan(
 		runLane(renameLocal, deleteLocal),
 	]);
 
+	// ── Phase 4 — empty directory pruning. ──
+	// When files are deleted or moved, their parent directories may become empty.
+	// Walk up and clean them up on both sides.
+	await pruneEmptyParentFolders(result, ctx);
+
 	return result;
 }
 
@@ -353,6 +358,11 @@ async function runActionIO(
 	switch (action.action) {
 		case "push": {
 			if (!action.local) throw new Error(`push action requires local entity: ${path}`);
+			if (action.local.isDirectory) {
+				const remoteEntity = await remoteFs.mkdir(path);
+				const localEntity = await localFs.stat(path) ?? action.local;
+				return { localEntity, remoteEntity };
+			}
 			const content = await localFs.read(path);
 			const remoteEntity = await remoteFs.write(path, content, action.local.mtime);
 			// stat() may return null if the file was deleted between read and stat (race condition);
@@ -363,6 +373,11 @@ async function runActionIO(
 
 		case "pull": {
 			if (!action.remote) throw new Error(`pull action requires remote entity: ${path}`);
+			if (action.remote.isDirectory) {
+				const localEntity = await localFs.mkdir(path);
+				const remoteEntity = await remoteFs.stat(path) ?? action.remote;
+				return { localEntity, remoteEntity };
+			}
 			const content = await remoteFs.read(path);
 			const localEntity = await localFs.write(path, content, action.remote.mtime);
 			// stat() may return null if the file was deleted between write and stat (race condition);
@@ -451,5 +466,56 @@ async function executeConflictAction(
 		result.failed.push({ action, error });
 	} finally {
 		reportProgress();
+	}
+}
+
+async function pruneEmptyParentFolders(result: ExecutionResult, ctx: ExecutionContext): Promise<void> {
+	const localCleanups = new Set<string>();
+	const remoteCleanups = new Set<string>();
+
+	for (const succeeded of result.succeeded) {
+		const action = succeeded.action;
+		if (action.action === "delete_local" || action.action === "rename_local") {
+			const oldPath = action.action === "rename_local" ? action.oldPath : action.path;
+			if (oldPath) {
+				const parent = oldPath.substring(0, oldPath.lastIndexOf("/"));
+				if (parent) localCleanups.add(parent);
+			}
+		}
+		if (action.action === "delete_remote" || action.action === "rename_remote") {
+			const oldPath = action.action === "rename_remote" ? action.oldPath : action.path;
+			if (oldPath) {
+				const parent = oldPath.substring(0, oldPath.lastIndexOf("/"));
+				if (parent) remoteCleanups.add(parent);
+			}
+		}
+	}
+
+	const prune = async (fs: IFileSystem, folderPath: string) => {
+		let current = folderPath;
+		while (current) {
+			try {
+				const children = await fs.listDir(current);
+				if (children.length === 0) {
+					ctx.logger?.debug(`Pruning empty directory: ${current}`);
+					await fs.delete(current);
+					current = current.substring(0, current.lastIndexOf("/"));
+				} else {
+					break;
+				}
+			} catch (err) {
+				break;
+			}
+		}
+	};
+
+	const sortPaths = (paths: Set<string>) =>
+		Array.from(paths).sort((a, b) => b.split("/").length - a.split("/").length);
+
+	for (const path of sortPaths(localCleanups)) {
+		await prune(ctx.localFs, path);
+	}
+	for (const path of sortPaths(remoteCleanups)) {
+		await prune(ctx.remoteFs, path);
 	}
 }

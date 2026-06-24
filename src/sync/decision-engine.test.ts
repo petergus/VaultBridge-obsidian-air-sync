@@ -518,3 +518,70 @@ describe("cold safety: no baseline never deletes", () => {
 		}
 	});
 });
+
+describe("directory actions", () => {
+	it("reconciles matching directories (no baseline) as match", () => {
+		expect(
+			decide({
+				path: "notes",
+				local: { path: "notes", isDirectory: true, size: 0, mtime: 0, hash: "" },
+				remote: { path: "notes", isDirectory: true, size: 0, mtime: 0, hash: "" },
+			}),
+		).toBe("match");
+	});
+
+	it("reconciles matching directories (with baseline) as null (skip)", () => {
+		expect(
+			decide({
+				path: "notes",
+				local: { path: "notes", isDirectory: true, size: 0, mtime: 0, hash: "" },
+				remote: { path: "notes", isDirectory: true, size: 0, mtime: 0, hash: "" },
+				prevSync: {
+					path: "notes",
+					hash: "",
+					localMtime: 0,
+					remoteMtime: 0,
+					localSize: 0,
+					remoteSize: 0,
+					syncedAt: 900,
+				},
+			}),
+		).toBe(null);
+	});
+
+	it("reconciles deleted remote directory (with baseline) as delete_local", () => {
+		expect(
+			decide({
+				path: "notes",
+				local: { path: "notes", isDirectory: true, size: 0, mtime: 0, hash: "" },
+				prevSync: {
+					path: "notes",
+					hash: "",
+					localMtime: 0,
+					remoteMtime: 0,
+					localSize: 0,
+					remoteSize: 0,
+					syncedAt: 900,
+				},
+			}),
+		).toBe("delete_local");
+	});
+
+	it("reconciles deleted local directory (with baseline) as delete_remote", () => {
+		expect(
+			decide({
+				path: "notes",
+				remote: { path: "notes", isDirectory: true, size: 0, mtime: 0, hash: "" },
+				prevSync: {
+					path: "notes",
+					hash: "",
+					localMtime: 0,
+					remoteMtime: 0,
+					localSize: 0,
+					remoteSize: 0,
+					syncedAt: 900,
+				},
+			}),
+		).toBe("delete_remote");
+	});
+});

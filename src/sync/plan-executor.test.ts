@@ -59,6 +59,28 @@ describe("executePlan", () => {
 			expect(remoteFs.files.has("a.md")).toBe(true);
 			expect(stateStore.records.has("a.md")).toBe(true);
 		});
+
+		it("creates directory on remote when local is directory", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+			await localFs.mkdir("notes");
+			const stateStore = ctx.committer.stateStore as unknown as ReturnType<typeof createMockStateStore>;
+
+			const plan = makePlan([{
+				path: "notes",
+				action: "push",
+				local: { path: "notes", isDirectory: true, size: 0, mtime: 1000, hash: "" },
+			}]);
+
+			const result = await executePlan(plan, ctx);
+
+			expect(result.succeeded).toHaveLength(1);
+			expect(result.failed).toHaveLength(0);
+			expect(remoteFs.files.has("notes")).toBe(true);
+			expect(remoteFs.files.get("notes")?.entity.isDirectory).toBe(true);
+			expect(stateStore.records.has("notes")).toBe(true);
+		});
 	});
 
 	describe("pull", () => {
@@ -80,6 +102,28 @@ describe("executePlan", () => {
 			expect(result.failed).toHaveLength(0);
 			expect((ctx.localFs as ReturnType<typeof createMockFs>).files.has("b.md")).toBe(true);
 			expect(stateStore.records.has("b.md")).toBe(true);
+		});
+
+		it("creates directory on local when remote is directory", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+			await remoteFs.mkdir("notes");
+			const stateStore = ctx.committer.stateStore as unknown as ReturnType<typeof createMockStateStore>;
+
+			const plan = makePlan([{
+				path: "notes",
+				action: "pull",
+				remote: { path: "notes", isDirectory: true, size: 0, mtime: 1000, hash: "" },
+			}]);
+
+			const result = await executePlan(plan, ctx);
+
+			expect(result.succeeded).toHaveLength(1);
+			expect(result.failed).toHaveLength(0);
+			expect(localFs.files.has("notes")).toBe(true);
+			expect(localFs.files.get("notes")?.entity.isDirectory).toBe(true);
+			expect(stateStore.records.has("notes")).toBe(true);
 		});
 	});
 
@@ -727,6 +771,67 @@ describe("executePlan", () => {
 			expect(calls).toHaveLength(5);
 			expect(calls[calls.length - 1]).toEqual([5, 5]);
 			expect(calls.map((c) => c[0]).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+		});
+	});
+
+	describe("empty parent directory pruning", () => {
+		it("prunes empty parent directories on local and remote after successful deletes/renames", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+
+			// Seed directories with files
+			addFile(localFs, "A/B/c.md", "content");
+			addFile(remoteFs, "X/Y/z.md", "content");
+
+			// Delete local file A/B/c.md (so folder A/B and folder A should become empty)
+			// Delete remote file X/Y/z.md (so folder X/Y and folder X should become empty)
+			const plan = makePlan([
+				{ path: "A/B/c.md", action: "delete_local" },
+				{ path: "X/Y/z.md", action: "delete_remote" },
+			]);
+
+			const result = await executePlan(plan, ctx);
+
+			expect(result.succeeded).toHaveLength(2);
+			expect(result.failed).toHaveLength(0);
+
+			// Files are gone
+			expect(localFs.files.has("A/B/c.md")).toBe(false);
+			expect(remoteFs.files.has("X/Y/z.md")).toBe(false);
+
+			// Empty folders are pruned
+			expect(localFs.files.has("A/B")).toBe(false);
+			expect(localFs.files.has("A")).toBe(false);
+			expect(remoteFs.files.has("X/Y")).toBe(false);
+			expect(remoteFs.files.has("X")).toBe(false);
+		});
+
+		it("does not prune parent directories if they are not empty", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+
+			// Seed directories with files (A/B has c.md and sibling.md)
+			addFile(localFs, "A/B/c.md", "content");
+			addFile(localFs, "A/B/sibling.md", "content2");
+
+			const plan = makePlan([
+				{ path: "A/B/c.md", action: "delete_local" },
+			]);
+
+			const result = await executePlan(plan, ctx);
+
+			expect(result.succeeded).toHaveLength(1);
+			expect(result.failed).toHaveLength(0);
+
+			// c.md is gone, sibling.md remains
+			expect(localFs.files.has("A/B/c.md")).toBe(false);
+			expect(localFs.files.has("A/B/sibling.md")).toBe(true);
+
+			// Parent directories are NOT pruned because sibling.md is still there
+			expect(localFs.files.has("A/B")).toBe(true);
+			expect(localFs.files.has("A")).toBe(true);
 		});
 	});
 

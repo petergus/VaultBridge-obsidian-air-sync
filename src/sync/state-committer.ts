@@ -86,7 +86,10 @@ export async function commitAction(
 		case "rename_remote":
 		case "rename_local": {
 			if (action.isFolder && action.descendants) {
-				await stateStore.rewritePaths(action.descendants);
+				await stateStore.rewritePaths([
+					...action.descendants,
+					{ oldPath: action.oldPath, newPath: action.path },
+				]);
 			} else {
 				await stateStore.delete(action.oldPath);
 				const renameRecord = buildSyncRecord(localEntity, remoteEntity, path);

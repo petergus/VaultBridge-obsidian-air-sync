@@ -207,7 +207,7 @@ export class DropboxClient {
 		const res = await this.rpc<DropboxLatestCursorResponse>(
 			"getLatestCursor",
 			"files/list_folder/get_latest_cursor",
-			{ path, recursive, include_deleted: false },
+			{ path, recursive, include_deleted: true },
 		);
 		return res.cursor;
 	}

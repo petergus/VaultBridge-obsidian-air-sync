@@ -64,6 +64,9 @@ function decideAction(entry: MixedEntity): SyncAction | null {
 	}
 
 	if (local && remote) {
+		if (local.isDirectory && remote.isDirectory) {
+			return { ...base, action: "match" };
+		}
 		// Provably-identical content (via hash or a same-algo remoteChecksum) is a
 		// no-op match; the size guard rejects the degenerate hash-collision case.
 		if (sameContent(local, remote) && local.size === remote.size) {
