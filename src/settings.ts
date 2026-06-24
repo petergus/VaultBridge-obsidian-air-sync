@@ -23,6 +23,20 @@ export interface VaultBridgeSettings {
 	 * resume).
 	 */
 	foregroundSyncCooldownSec: number;
+	/**
+	 * Hold automatic sync while the device reports no network connection
+	 * (`navigator.onLine === false`). Edits keep accumulating in the in-memory dirty
+	 * set and flush automatically on the next `online` event — gating just avoids
+	 * waking the radio for doomed network calls + retry backoff while offline. Manual
+	 * "Sync now" is never gated. Default on.
+	 */
+	pauseSyncWhenOffline: boolean;
+	/**
+	 * Seconds to wait after the last local edit before syncing (the edit debounce). A
+	 * longer window means fewer radio wakeups during active editing, at the cost of a
+	 * little sync latency. Floored at 1 s in the wiring. Default 5.
+	 */
+	syncDebounceSec: number;
 	/** Hold a screen wake lock while syncing so mobile devices don't sleep mid-sync */
 	screenWakeLockOnSync: boolean;
 	/** Show a notice summarizing each completed sync cycle (independent of logging) */
@@ -60,6 +74,8 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
 	enableThreeWayMerge: true,
 	mobileMaxFileSizeMB: 10,
 	foregroundSyncCooldownSec: 60,
+	pauseSyncWhenOffline: true,
+	syncDebounceSec: 5,
 	screenWakeLockOnSync: false,
 	showSyncNotifications: false,
 	enableLogging: false,

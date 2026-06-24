@@ -353,6 +353,8 @@ export function mockSettings(
 		enableThreeWayMerge: true,
 		mobileMaxFileSizeMB: 10,
 		foregroundSyncCooldownSec: 60,
+		pauseSyncWhenOffline: true,
+		syncDebounceSec: 5,
 		screenWakeLockOnSync: false,
 		showSyncNotifications: false,
 		enableLogging: false,

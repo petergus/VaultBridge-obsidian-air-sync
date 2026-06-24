@@ -128,6 +128,9 @@ export default class VaultBridgePlugin extends Plugin {
 			orchestrator: this.orchestrator,
 			isExcluded: (path) => this.orchestrator.isExcluded(path),
 			cooldownMs: () => Math.max(0, this.settings.foregroundSyncCooldownSec) * 1000,
+			pauseWhenOffline: () => this.settings.pauseSyncWhenOffline,
+			// 1 s floor so the field can't be set to a battery-hostile near-zero window.
+			debounceMs: () => Math.max(1000, this.settings.syncDebounceSec * 1000),
 			registerEvent: (ref) => this.registerEvent(ref),
 			registerWindowEvent: (type, cb) => this.registerDomEvent(window, type, cb),
 			registerDocumentEvent: (type, cb) => this.registerDomEvent(document, type, cb),
@@ -196,8 +199,13 @@ export default class VaultBridgePlugin extends Plugin {
 
 		// Run one sync once the vault index is loaded. The scheduler defers its
 		// event wiring until then, and runSync() is gated on layoutReady, so this
-		// is the first sync of the session ("caught up on open").
-		this.app.workspace.onLayoutReady(() => void this.runSync());
+		// is the first sync of the session ("caught up on open"). Skip it when
+		// offline-gated — the `online` event re-runs it once connectivity returns,
+		// so an offline launch avoids a doomed first sync.
+		this.app.workspace.onLayoutReady(() => {
+			if (this.settings.pauseSyncWhenOffline && !navigator.onLine) return;
+			void this.runSync();
+		});
 	}
 
 	onunload() {

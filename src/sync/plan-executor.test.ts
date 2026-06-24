@@ -810,7 +810,6 @@ describe("executePlan", () => {
 		it("does not prune parent directories if they are not empty", async () => {
 			const ctx = makeCtx();
 			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
-			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
 
 			// Seed directories with files (A/B has c.md and sibling.md)
 			addFile(localFs, "A/B/c.md", "content");
