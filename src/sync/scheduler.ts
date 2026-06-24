@@ -5,6 +5,22 @@ import type { SyncStateStore } from "./state";
 import type { LocalChangeTracker } from "./local-tracker";
 import { hasChanged, hasRemoteChanged } from "./change-compare";
 
+/**
+ * Default edit-debounce window (ms): a vault change schedules a sync this long after
+ * the last edit, coalescing a burst of edits into one cycle. Used as the fallback
+ * when no `debounceMs` dep is supplied (e.g. tests). The live value is
+ * user-configurable (`syncDebounceSec`) — a longer window means fewer radio wakeups
+ * during active editing, at the cost of a little sync latency. Because Obsidian's
+ * `debounce()` bakes its timeout in at creation, the live override is applied by
+ * recreating the debouncer when the value changes (see `scheduleDebouncedSync`).
+ *
+ * Automatic triggers are additionally OFFLINE-GATED: when `pauseWhenOffline()` is on
+ * and `isOnline()` is false, the debounced-sync callback, the foreground-resume
+ * signals, and the file-open priority pull early-return so the device doesn't burn the
+ * radio on doomed network calls + retry backoff while offline. Edits keep accumulating
+ * in the dirty set and flush on the next `online` event (`triggerSync`, never gated —
+ * the device is online there by definition). Manual "Sync now" is not gated.
+ */
 const DEBOUNCE_MS = 5000;
 
 /**
@@ -47,6 +63,15 @@ export interface SyncSchedulerDeps {
 	 * DEFAULT_FOREGROUND_SYNC_COOLDOWN_MS when omitted.
 	 */
 	cooldownMs?: () => number;
+	/** Whether the device reports a network connection. Defaults to navigator.onLine. */
+	isOnline?: () => boolean;
+	/** Whether automatic sync should be held while offline. Defaults to off. */
+	pauseWhenOffline?: () => boolean;
+	/**
+	 * Live edit-debounce window in milliseconds (read per scheduled edit so a settings
+	 * change applies without re-wiring). Defaults to DEBOUNCE_MS when omitted.
+	 */
+	debounceMs?: () => number;
 }
 
 export class SyncScheduler {
@@ -67,19 +92,56 @@ export class SyncScheduler {
 	private lastForegroundSyncAt = 0;
 	private readonly now: () => number;
 	private readonly cooldownMs: () => number;
+	private readonly isOnline: () => boolean;
+	private readonly pauseWhenOffline: () => boolean;
+	private readonly debounceMs: () => number;
+	/** Timeout baked into the current `debouncedSync` instance (live override tracking). */
+	private currentDebounceMs: number;
 
 	constructor(deps: SyncSchedulerDeps) {
 		this.deps = deps;
 		this.now = deps.now ?? (() => Date.now());
 		this.cooldownMs = deps.cooldownMs ?? (() => DEFAULT_FOREGROUND_SYNC_COOLDOWN_MS);
-		this.debouncedSync = debounce(
+		this.isOnline = deps.isOnline ?? (() => navigator.onLine);
+		this.pauseWhenOffline = deps.pauseWhenOffline ?? (() => false);
+		this.debounceMs = deps.debounceMs ?? (() => DEBOUNCE_MS);
+		this.currentDebounceMs = this.debounceMs();
+		this.debouncedSync = this.makeDebouncedSync(this.currentDebounceMs);
+	}
+
+	private makeDebouncedSync(ms: number): ReturnType<typeof debounce> {
+		return debounce(
 			() => {
+				// A debounce that fires while offline-gated is a no-op: leave the dirty
+				// set intact so the next `online` event flushes the accumulated edits.
+				if (this.isOfflineGated()) return;
 				if (!this.deps.remoteFs()) return;
-				void deps.orchestrator.runSync();
+				void this.deps.orchestrator.runSync();
 			},
-			DEBOUNCE_MS,
+			ms,
 			true,
 		);
+	}
+
+	/** True when automatic sync should be held because the device is offline. */
+	private isOfflineGated(): boolean {
+		return this.pauseWhenOffline() && !this.isOnline();
+	}
+
+	/**
+	 * Route every edit-driven debounce through here so the live `debounceMs()` override
+	 * takes effect: Obsidian's `debounce()` bakes its timeout in at creation, so when
+	 * the configured window changes we cancel the stale instance and recreate it at the
+	 * new interval before invoking.
+	 */
+	private scheduleDebouncedSync(): void {
+		const ms = this.debounceMs();
+		if (ms !== this.currentDebounceMs) {
+			this.debouncedSync.cancel();
+			this.currentDebounceMs = ms;
+			this.debouncedSync = this.makeDebouncedSync(ms);
+		}
+		this.debouncedSync();
 	}
 
 	start(): void {
@@ -135,6 +197,9 @@ export class SyncScheduler {
 	 */
 	private triggerForegroundSync(): void {
 		if (!this.deps.remoteFs()) return;
+		// Offline: skip the doomed remote re-scan but leave `departed` set so the
+		// first return after connectivity is back still syncs.
+		if (this.isOfflineGated()) return;
 		if (this.deps.orchestrator.isSyncing()) return;
 		if (!this.departed) return;
 		// Battery: a resume within the cooldown window is acknowledged but does NOT
@@ -168,7 +233,7 @@ export class SyncScheduler {
 		const onVaultChange = (file: TAbstractFile) => {
 			if (!isExcluded(file.path)) {
 				localTracker.markDirty(file.path);
-				this.debouncedSync();
+				this.scheduleDebouncedSync();
 			}
 		};
 
@@ -184,7 +249,7 @@ export class SyncScheduler {
 				if (!isExcluded(oldPath)) localTracker.markDirty(oldPath);
 			}
 			if (!isExcluded(file.path) || !isExcluded(oldPath)) {
-				this.debouncedSync();
+				this.scheduleDebouncedSync();
 			}
 		};
 
@@ -235,6 +300,8 @@ export class SyncScheduler {
 		this.deps.registerEvent(
 			workspace.on("file-open", async (file: TFile | null) => {
 				if (!file) return;
+				// Offline: don't wake the radio for the remote stat() priority pull.
+				if (this.isOfflineGated()) return;
 				const record = await stateStore.get(file.path);
 				if (!record) return;
 				const lFs = localFs();

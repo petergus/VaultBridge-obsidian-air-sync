@@ -214,6 +214,38 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl)
+			.setName("Sync delay after edits (seconds)")
+			.setDesc(
+				"How long to wait after your last edit before syncing. A longer delay means fewer syncs while you're actively typing — better battery, slightly more sync latency. Minimum 1 second."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("5")
+					.setValue(String(this.plugin.settings.syncDebounceSec))
+					.onChange(async (value) => {
+						const num = parseInt(value, 10);
+						if (!isNaN(num) && num >= 1) {
+							this.plugin.settings.syncDebounceSec = num;
+							await this.plugin.saveSettings();
+						}
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Pause sync while offline")
+			.setDesc(
+				"While your device has no connection, hold sync instead of attempting doomed network calls. Edits queue up and upload automatically when you're back online."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.pauseSyncWhenOffline)
+					.onChange(async (value) => {
+						this.plugin.settings.pauseSyncWhenOffline = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
 		if (Platform.isMobile) {
 			new Setting(containerEl)
 				.setName("Keep screen awake during sync")

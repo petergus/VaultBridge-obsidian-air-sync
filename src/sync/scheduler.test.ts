@@ -517,6 +517,118 @@ describe("SyncScheduler", () => {
 		});
 	});
 
+	// Battery: while the device is offline, holding automatic sync avoids waking the
+	// radio for doomed network calls + retry backoff. Edits accumulate in the dirty
+	// set (cleared only by a successful cycle) and flush on the next `online` event,
+	// which is never gated (the device is online there by definition).
+	describe("offline gating", () => {
+		const fireOnline = () =>
+			windowListeners.get("online")!(new Event("online"));
+
+		it("holds an edit-driven sync while offline, then flushes on reconnect", () => {
+			scheduler.destroy();
+			deps = createDeps({
+				pauseWhenOffline: () => true,
+				isOnline: () => false,
+			});
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			const handler = deps.vaultHandlers.get("modify") as VaultHandler;
+			handler(makeFile("note.md"));
+			vi.advanceTimersByTime(5000);
+			// Gated: no sync, but the edit is still queued in the dirty set.
+			expect(deps.runSync).not.toHaveBeenCalled();
+			expect(deps.localTracker.getDirtyPaths().has("note.md")).toBe(true);
+
+			// Reconnect → the online trigger flushes the accumulated edits.
+			fireOnline();
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+		});
+
+		it("holds a foreground resume while offline", () => {
+			scheduler.destroy();
+			deps = createDeps({
+				pauseWhenOffline: () => true,
+				isOnline: () => false,
+			});
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			fireBlur(); // depart
+			fireFocus(); // return — but offline-gated
+			expect(deps.runSync).not.toHaveBeenCalled();
+		});
+
+		it("syncs normally when the gate is disabled (regression guard)", () => {
+			scheduler.destroy();
+			deps = createDeps({
+				pauseWhenOffline: () => false,
+				isOnline: () => false,
+			});
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			const handler = deps.vaultHandlers.get("modify") as VaultHandler;
+			handler(makeFile("note.md"));
+			vi.advanceTimersByTime(5000);
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+		});
+
+		it("syncs normally when online even with the gate on", () => {
+			scheduler.destroy();
+			deps = createDeps({
+				pauseWhenOffline: () => true,
+				isOnline: () => true,
+			});
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			const handler = deps.vaultHandlers.get("modify") as VaultHandler;
+			handler(makeFile("note.md"));
+			vi.advanceTimersByTime(5000);
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	// The edit-debounce window is user-configurable (syncDebounceSec). Obsidian's
+	// debounce() bakes its timeout in at creation, so the scheduler recreates the
+	// debouncer when the live value changes (cancel + reschedule).
+	describe("configurable debounce", () => {
+		it("honors a custom debounce window", () => {
+			scheduler.destroy();
+			deps = createDeps({ debounceMs: () => 10_000 });
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			const handler = deps.vaultHandlers.get("modify") as VaultHandler;
+			handler(makeFile("note.md"));
+			vi.advanceTimersByTime(5000); // old default — must NOT fire yet
+			expect(deps.runSync).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(5000); // now past 10s
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+		});
+
+		it("recreates the timer when the window changes between edits", () => {
+			scheduler.destroy();
+			let window = 10_000;
+			deps = createDeps({ debounceMs: () => window });
+			scheduler = new SyncScheduler(deps);
+			scheduler.start();
+
+			const handler = deps.vaultHandlers.get("modify") as VaultHandler;
+			handler(makeFile("a.md"));
+			vi.advanceTimersByTime(3000);
+
+			// Shrink the window mid-burst: the next edit cancels the 10s timer and
+			// reschedules at 2s, firing 2s after this edit (not the original 10s).
+			window = 2000;
+			handler(makeFile("b.md"));
+			vi.advanceTimersByTime(2000);
+			expect(deps.runSync).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	describe("destroy", () => {
 		it("cancels debounced sync", () => {
 			const handler = deps.vaultHandlers.get("modify") as VaultHandler;
