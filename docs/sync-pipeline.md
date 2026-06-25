@@ -137,11 +137,12 @@ For no-baseline rows the localChanged/remoteChanged columns do not apply — `ha
 
 ## Deletion safety
 
-There is no volume-based abort gate. Deletion safety rests on three independent layers:
+Deletion safety has four independent layers:
 
 1. **Decision rules** -- an ambiguous case (a file gone on one side while the surviving side changed since baseline) is routed to `conflict` (keep both), never to a deletion; a missing baseline never yields a deletion.
 2. **layoutReady gate** -- sync does not run before the Obsidian vault index is loaded. `SyncScheduler` defers its event wiring, and `runSync()` is gated on `app.workspace.layoutReady`, so a `list()` that under-reports during startup cannot be mistaken for mass local deletions.
 3. **Authoritative absence** -- a would-be local deletion (a baseline path missing from the in-memory `list()`) is re-`stat()`'d against the filesystem before it is acted on. `LocalFs.stat()` falls back to the vault adapter on an index miss. Only warm change detection runs `confirmLocalDeletions()` (hot and cold do not), re-`stat()`-ing each candidate (an entry with a prior baseline but no `local`: `!e.local && e.prevSync`) via `AsyncPool(10)`; a non-directory file found on disk has its `entry.local` restored, moving it out of the deletion branches. Only a genuine absence (gone on disk too, or `stat()` returns null/throws) propagates. Deletions are additionally soft -- to trash on both sides -- so even a correct deletion stays recoverable.
+4. **Configurable plan cap** -- after rename optimization and before execution, `enforceDeletionLimit()` counts `delete_local` and `delete_remote` actions. If their combined count exceeds **Maximum deletions per sync** (default 20; `0` disables), the whole plan is aborted before any action or checkpoint commit. The cycle is not acknowledged, so it remains pending until the user reviews the devices and raises/disables the limit for an intentional bulk deletion. Rename and state-only cleanup actions do not count.
 
 ## Rename optimization
 

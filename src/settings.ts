@@ -16,6 +16,11 @@ export interface VaultBridgeSettings {
 	/** Maximum file size in MB to sync on mobile */
 	mobileMaxFileSizeMB: number;
 	/**
+	 * Maximum number of delete actions allowed in one sync plan. The whole plan is
+	 * blocked before execution when this is exceeded. `0` disables the guard.
+	 */
+	maxDeletionsPerSync: number;
+	/**
 	 * Minimum seconds between two resume-triggered remote re-checks. Returning to
 	 * the app within this window is acknowledged but does not re-scan the remote —
 	 * the battery-saver for mobile, where the app is foregrounded constantly. Local
@@ -73,6 +78,7 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
 	syncDotPaths: [],
 	enableThreeWayMerge: true,
 	mobileMaxFileSizeMB: 10,
+	maxDeletionsPerSync: 20,
 	foregroundSyncCooldownSec: 60,
 	pauseSyncWhenOffline: true,
 	syncDebounceSec: 5,
@@ -83,6 +89,5 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
 	backendData: {},
 	lastSyncedIdentity: "",
 };
-
 
 

@@ -138,6 +138,24 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Maximum deletions per sync")
+			.setDesc(
+				"Stop the entire sync before it changes anything when more than this many local and remote deletions are planned. Set to 0 to disable. Renames do not count."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("20")
+					.setValue(String(this.plugin.settings.maxDeletionsPerSync))
+					.onChange(async (value) => {
+						const num = parseInt(value, 10);
+						if (!isNaN(num) && num >= 0) {
+							this.plugin.settings.maxDeletionsPerSync = num;
+							await this.plugin.saveSettings();
+						}
+					})
+			);
+
+		new Setting(containerEl)
 			.setName("Dot-prefixed paths to sync")
 			.setDesc(
 				"Dot-prefixed folders to include in sync, one per line (e.g. .templates)."

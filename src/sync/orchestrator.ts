@@ -19,6 +19,7 @@ import type { ConflictRecord, SyncStatus } from "./types";
 import { buildSyncRecord } from "./state-committer";
 import { CycleSummary } from "./sync-notification";
 import type { SyncCycleResult } from "./sync-notification";
+import { enforceDeletionLimit, MassDeletionBlockedError } from "./deletion-guard";
 
 export type { SyncStatus };
 
@@ -253,6 +254,20 @@ export class SyncOrchestrator {
 				};
 			} catch (err) {
 				lastError = err;
+				if (err instanceof MassDeletionBlockedError) {
+					this.deps.onStatusChange("error");
+					this.deps.notify(
+						`Sync stopped: ${err.counts.total} deletions were planned (${err.counts.local} local, ${err.counts.remote} remote), above your limit of ${err.limit}. Review the affected devices, then change “Maximum deletions per sync” in Advanced settings if this was intentional.`,
+						15_000,
+					);
+					this.deps.logger?.warn("Mass deletion plan blocked", {
+						limit: err.limit,
+						localDeletions: err.counts.local,
+						remoteDeletions: err.counts.remote,
+					});
+					await this.deps.logger?.flush();
+					return null;
+				}
 				// Classification is the backend's job (it knows its own error shapes,
 				// e.g. that Google 403 can mean rate-limit); the retry POLICY is the
 				// engine's and stays backend-neutral. Fall back to the generic HTTP
@@ -417,6 +432,8 @@ export class SyncOrchestrator {
 			total: plan.actions.length,
 			...actionBreakdown,
 		});
+
+		enforceDeletionLimit(plan, settings.maxDeletionsPerSync);
 
 		const total = plan.actions.length;
 

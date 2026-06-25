@@ -12,14 +12,16 @@ import type { SyncStateStore } from "./state";
 import type { MixedEntity, SyncRecord } from "./types";
 import type { FileEntity } from "../fs/types";
 import { sha256 } from "../utils/hash";
+import { enforceDeletionLimit, MassDeletionBlockedError } from "./deletion-guard";
 
 /**
  * Delete-safety contracts.
  *
  * §2-1: the old volume-based `safety-check` hard-aborted any 100%-deletion plan
  * with no count floor, so a single legitimate deletion never propagated while the
- * orchestrator reported success. The guard was removed; a lone deletion now plans
- * and executes normally — pinned GREEN below.
+ * orchestrator reported success. The replacement is a user-configurable absolute
+ * cap: ordinary deletions below the cap still propagate, while a large plan is
+ * blocked atomically before execution.
  *
  * Phantom warm deletion: a warm sync reads the in-memory vault index
  * (getAllLoadedFiles), which can under-report. An erroneous deletion is PREVENTED
@@ -88,6 +90,46 @@ describe("§2-1 (fixed): a lone deletion is no longer silently aborted", () => {
 		expect(result.succeeded).toHaveLength(1);
 		expect(remoteFs.files.has("note.md")).toBe(false);
 		expect(await stateStore.get("note.md")).toBeUndefined();
+	});
+});
+
+describe("configurable mass-deletion guard", () => {
+	it("allows a plan at the configured limit", () => {
+		expect(() => enforceDeletionLimit({
+			actions: [
+				{ path: "local.md", action: "delete_local" },
+				{ path: "remote.md", action: "delete_remote" },
+			],
+		}, 2)).not.toThrow();
+	});
+
+	it("blocks the complete plan above the limit with a directional breakdown", () => {
+		try {
+			enforceDeletionLimit({
+				actions: [
+					{ path: "a.md", action: "delete_local" },
+					{ path: "b.md", action: "delete_local" },
+					{ path: "c.md", action: "delete_remote" },
+					{ path: "new.md", action: "push" },
+				],
+			}, 2);
+			expect.fail("Expected the deletion guard to block the plan");
+		} catch (err) {
+			expect(err).toBeInstanceOf(MassDeletionBlockedError);
+			const blocked = err as MassDeletionBlockedError;
+			expect(blocked.counts).toEqual({ local: 2, remote: 1, total: 3 });
+			expect(blocked.limit).toBe(2);
+		}
+	});
+
+	it("does not count renames or cleanup, and 0 disables the guard", () => {
+		expect(() => enforceDeletionLimit({
+			actions: [
+				{ path: "new.md", oldPath: "old.md", action: "rename_local" },
+				{ path: "stale.md", action: "cleanup" },
+				{ path: "gone.md", action: "delete_remote" },
+			],
+		}, 0)).not.toThrow();
 	});
 });
 
