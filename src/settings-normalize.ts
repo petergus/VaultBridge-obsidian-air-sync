@@ -1,4 +1,5 @@
 import type { VaultBridgeSettings } from "./settings";
+import { DEFAULT_IGNORE_PATTERNS } from "./settings";
 
 function isObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -38,6 +39,53 @@ export function liftActiveBackendData(
 	const active = bag[settings.backendType];
 	settings.backendData = isObject(active) ? active : {};
 	return true;
+}
+
+/**
+ * Add any missing default ignore patterns to an existing vault's pattern list.
+ *
+ * WHY THIS EXISTS: `DEFAULT_IGNORE_PATTERNS` was added after initial release.
+ * New installs get these patterns automatically via DEFAULT_SETTINGS, but
+ * existing vaults only have whatever they had at first-run — which was [].
+ * This migration appends each default pattern that isn't already present (either
+ * literally or negated with a leading !) so no user-intentional exclusion is
+ * overridden. Safe to run on every load — idempotent when patterns are present.
+ *
+ * @returns true if `settings.ignorePatterns` was changed (caller should persist).
+ */
+export function addMissingDefaultIgnorePatterns(settings: VaultBridgeSettings): boolean {
+	let changed = false;
+	for (const pattern of DEFAULT_IGNORE_PATTERNS) {
+		const negated = `!${pattern}`;
+		const alreadyPresent =
+			settings.ignorePatterns.includes(pattern) ||
+			settings.ignorePatterns.includes(negated);
+		if (!alreadyPresent) {
+			settings.ignorePatterns.push(pattern);
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+/**
+ * Migrate `maxDeletionsPerSync: 0` (the old "disabled" sentinel) to the safe
+ * default of 20.
+ *
+ * WHY THIS EXISTS: the setting's documented meaning was "0 disables the guard",
+ * which users set expecting safety and got the opposite — a disabled guard allows
+ * unlimited mass deletions. The sentinel is now -1 (or leaving the field absent);
+ * 0 is treated as "misconfigured" and silently corrected here. Any positive value
+ * is left as-is (the user intentionally configured it).
+ *
+ * @returns true if `settings.maxDeletionsPerSync` was changed (caller should persist).
+ */
+export function normalizeDeletionLimit(settings: { maxDeletionsPerSync: number }): boolean {
+	if (settings.maxDeletionsPerSync === 0) {
+		settings.maxDeletionsPerSync = 20;
+		return true;
+	}
+	return false;
 }
 
 /**

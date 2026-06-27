@@ -72,11 +72,22 @@ export async function collectChanges(
 	// Ensure rename-related local entries have hashes (WARM/COLD use list() → hash:"")
 	await enrichHashesForRenames(changeSet.entries, deps.localFs, changes.renamePairs);
 
-	// Warm mode infers local deletions from absence in list() (the in-memory vault
-	// index), which can under-report. Confirm each candidate against the authoritative
-	// filesystem so an unindexed-but-on-disk file is never deleted.
-	if (changeSet.temperature === "warm") {
+	// Both warm and cold infer local deletions from absence in list(), which can
+	// under-report (warm: vault index; cold: post-error full scan that may be
+	// truncated). Confirm each "looks locally deleted" candidate against the
+	// authoritative filesystem so an under-reported listing can't drive a wrongful
+	// delete_remote. Cold mode is the post-failure recovery path — running this
+	// guard there is especially important.
+	if (changeSet.temperature === "warm" || changeSet.temperature === "cold") {
 		await confirmLocalDeletions(changeSet.entries, deps.localFs);
+	}
+
+	// Mirror guard for the remote side: confirm "looks remotely deleted" candidates
+	// via stat() so a partial or truncated remote list() can't drive a wrongful
+	// delete_local. Applies to cold mode (the post-failure full-scan) only — warm
+	// already has a delta cursor so remote absences are authoritative there.
+	if (changeSet.temperature === "cold") {
+		await confirmRemoteDeletions(changeSet.entries, deps.remoteFs);
 	}
 
 	return changeSet;
@@ -340,6 +351,37 @@ async function confirmLocalDeletions(
 					}
 				} catch {
 					// Skip — a genuinely missing file returns null/throws → stays a deletion
+				}
+			})
+		)
+	);
+}
+
+/**
+ * Confirm cold-mode remote deletions against the authoritative remote filesystem.
+ * A baseline path absent from remoteFs.list() but still present on the remote was
+ * simply missing from the listing (truncated scan, post-error cursor stale, etc.) —
+ * it was NOT deleted. Re-stat each such candidate; if the remote file exists, set
+ * entry.remote so an incomplete listing cannot drive an erroneous delete_local.
+ */
+async function confirmRemoteDeletions(
+	entries: MixedEntity[],
+	remoteFs: IFileSystem,
+): Promise<void> {
+	const candidates = entries.filter((e) => !e.remote && e.prevSync);
+	if (candidates.length === 0) return;
+
+	const pool = new AsyncPool(10);
+	await Promise.all(
+		candidates.map((entry) =>
+			pool.run(async () => {
+				try {
+					const stat = await remoteFs.stat(entry.path);
+					if (stat) {
+						entry.remote = stat;
+					}
+				} catch {
+					// Skip — a genuinely missing remote file returns null/throws → stays a deletion
 				}
 			})
 		)

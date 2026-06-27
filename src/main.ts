@@ -1,6 +1,6 @@
 import { Notice, Platform, Plugin, setIcon, setTooltip, TFile } from "obsidian";
 import { DEFAULT_SETTINGS, VaultBridgeSettings } from "./settings";
-import { liftActiveBackendData, normalizeConflictStrategy } from "./settings-normalize";
+import { liftActiveBackendData, normalizeConflictStrategy, normalizeDeletionLimit, addMissingDefaultIgnorePatterns } from "./settings-normalize";
 import { VaultBridgeSettingTab } from "./ui/settings";
 import { LocalFs } from "./fs/local/index";
 import { BackendManager } from "./fs/backend-manager";
@@ -233,6 +233,16 @@ export default class VaultBridgePlugin extends Plugin {
 
 		// Coerce a removed conflictStrategy (e.g. the retired "ask") to a valid one.
 		if (normalizeConflictStrategy(this.settings)) {
+			needsSave = true;
+		}
+
+		// Migrate maxDeletionsPerSync: 0 (old "disabled" sentinel) to the safe default.
+		if (normalizeDeletionLimit(this.settings)) {
+			needsSave = true;
+		}
+
+		// Add regenerable-tree patterns missing from existing vaults.
+		if (addMissingDefaultIgnorePatterns(this.settings)) {
 			needsSave = true;
 		}
 

@@ -11,6 +11,8 @@ import { DropboxFs } from "./index";
 import { DropboxAuthProvider, type DropboxAuth } from "./auth";
 import type { DropboxEntry } from "./types";
 import { DropboxSettingsRenderer } from "../../ui/dropbox-settings";
+import { classifyDropboxError } from "./errors";
+import type { ErrorClassification } from "../errors";
 
 // Note: the shared REMOTE_VAULT_ROOT wrapper folder is intentionally NOT used —
 // Dropbox's App Folder scope already namespaces the app, so the vault lives at
@@ -79,6 +81,10 @@ export class DropboxProvider extends PkceAppFolderProvider<DropboxBackendData, D
 		store: MetadataStore<DropboxEntry> | undefined,
 	): IFileSystem {
 		return new DropboxFs(client, folderId, logger, store);
+	}
+
+	classifyError(err: unknown): ErrorClassification {
+		return classifyDropboxError(err);
 	}
 
 	createSettingsRenderer(): IBackendSettingsRenderer {

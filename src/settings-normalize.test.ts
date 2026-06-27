@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { liftActiveBackendData, normalizeConflictStrategy } from "./settings-normalize";
+import { liftActiveBackendData, normalizeConflictStrategy, normalizeDeletionLimit, addMissingDefaultIgnorePatterns } from "./settings-normalize";
+import { DEFAULT_IGNORE_PATTERNS } from "./settings";
+import type { VaultBridgeSettings } from "./settings";
 import { mockSettings } from "./__mocks__/sync-test-helpers";
 
 const KNOWN = ["googledrive", "googledrive-custom"];
@@ -70,5 +72,60 @@ describe("liftActiveBackendData", () => {
 		const settings = mockSettings({ backendType: "googledrive", backendData: {} });
 		expect(liftActiveBackendData(settings, KNOWN)).toBe(false);
 		expect(settings.backendData).toEqual({});
+	});
+});
+
+describe("normalizeDeletionLimit", () => {
+	it("migrates 0 (old disabled sentinel) to 20", () => {
+		const settings = mockSettings({ maxDeletionsPerSync: 0 });
+		expect(normalizeDeletionLimit(settings)).toBe(true);
+		expect(settings.maxDeletionsPerSync).toBe(20);
+	});
+
+	it("leaves a positive value unchanged", () => {
+		const settings = mockSettings({ maxDeletionsPerSync: 50 });
+		expect(normalizeDeletionLimit(settings)).toBe(false);
+		expect(settings.maxDeletionsPerSync).toBe(50);
+	});
+
+	it("leaves the default (20) unchanged", () => {
+		const settings = mockSettings({ maxDeletionsPerSync: 20 });
+		expect(normalizeDeletionLimit(settings)).toBe(false);
+	});
+});
+
+describe("addMissingDefaultIgnorePatterns", () => {
+	it("adds all default patterns to a vault with no ignore patterns", () => {
+		const settings = mockSettings({ ignorePatterns: [] });
+		expect(addMissingDefaultIgnorePatterns(settings)).toBe(true);
+		for (const p of DEFAULT_IGNORE_PATTERNS) {
+			expect(settings.ignorePatterns).toContain(p);
+		}
+	});
+
+	it("is idempotent — does not add duplicates when patterns already present", () => {
+		const settings = mockSettings({ ignorePatterns: [...DEFAULT_IGNORE_PATTERNS] });
+		const before = settings.ignorePatterns.length;
+		expect(addMissingDefaultIgnorePatterns(settings)).toBe(false);
+		expect(settings.ignorePatterns).toHaveLength(before);
+	});
+
+	it("does not add a pattern the user has explicitly negated (!pattern)", () => {
+		const negated = `!${DEFAULT_IGNORE_PATTERNS[0]}`;
+		const settings = mockSettings({ ignorePatterns: [negated] });
+		addMissingDefaultIgnorePatterns(settings);
+		expect(settings.ignorePatterns).not.toContain(DEFAULT_IGNORE_PATTERNS[0]);
+		expect(settings.ignorePatterns).toContain(negated);
+	});
+
+	it("adds only the missing patterns when some are already present", () => {
+		const settings: VaultBridgeSettings = mockSettings({
+			ignorePatterns: [DEFAULT_IGNORE_PATTERNS[0]],
+		});
+		expect(addMissingDefaultIgnorePatterns(settings)).toBe(true);
+		for (const p of DEFAULT_IGNORE_PATTERNS) {
+			expect(settings.ignorePatterns).toContain(p);
+		}
+		expect(settings.ignorePatterns.filter((p) => p === DEFAULT_IGNORE_PATTERNS[0])).toHaveLength(1);
 	});
 });

@@ -15,9 +15,10 @@ export class AuthError extends Error {
  * - `permission` — authenticated but forbidden ⇒ abort and prompt about permissions.
  * - `rateLimit` — throttled ⇒ retry, honouring `retryAfterMs` when the server set one.
  * - `notFound` — the target is gone (404) ⇒ stop retrying.
+ * - `storageFull` — remote quota exhausted ⇒ abort; retrying won't help until space is freed.
  * - `transient` — network blip / 5xx / unknown ⇒ retry with backoff.
  */
-export type ErrorKind = "auth" | "permission" | "rateLimit" | "notFound" | "transient";
+export type ErrorKind = "auth" | "permission" | "rateLimit" | "notFound" | "storageFull" | "transient";
 
 export interface ErrorClassification {
 	kind: ErrorKind;
@@ -129,6 +130,7 @@ export function decideRetry(
 ): RetryDecision {
 	if (classification.kind === "auth") return { action: "abort", kind: "auth" };
 	if (classification.kind === "permission") return { action: "abort", kind: "permission" };
+	if (classification.kind === "storageFull") return { action: "abort", kind: "permission" };
 	if (classification.kind === "notFound") return { action: "stop" };
 	if (attempt >= maxRetries) return { action: "exhausted" };
 

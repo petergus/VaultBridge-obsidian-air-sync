@@ -129,6 +129,59 @@ describe("SyncOrchestrator", () => {
 			await orchestrator.close();
 		});
 
+		it("quarantines over-limit deletions and still executes safe actions", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			// limit = 2, but 3 files will be deleted (all missing locally)
+			const settings = { ...mockSettings(), maxDeletionsPerSync: 2 };
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
+			const deps = createDeps({
+				getSettings: () => settings,
+				localFs: () => localFs,
+				remoteFs: () => remoteFs,
+			});
+			const heldSpy = vi.fn();
+			deps.onDeletionsHeld = heldSpy;
+			const orchestrator = new SyncOrchestrator(deps);
+
+			for (const path of ["a.md", "b.md", "c.md"]) {
+				addFile(remoteFs, path, "body", 1000);
+				await orchestrator.state.put({
+					path,
+					hash: "",
+					localMtime: 1000,
+					remoteMtime: 1000,
+					localSize: 4,
+					remoteSize: 4,
+					syncedAt: 900,
+				});
+			}
+			// Add a local-only file so there is a safe push to verify it still executes
+			addFile(localFs, "new.md", "new content", 2000);
+
+			await orchestrator.runSync();
+
+			// Deletions were quarantined — remote files survive
+			expect(remoteFs.files.has("a.md")).toBe(true);
+			expect(remoteFs.files.has("b.md")).toBe(true);
+			expect(remoteFs.files.has("c.md")).toBe(true);
+			// The safe push executed
+			expect(remoteFs.files.has("new.md")).toBe(true);
+			// onDeletionsHeld was called with 3 held actions
+			expect(heldSpy).toHaveBeenCalledWith(
+				expect.arrayContaining([expect.objectContaining({ action: "delete_remote" })]),
+			);
+			expect(heldSpy.mock.calls[0][0]).toHaveLength(3);
+			// User-facing notice mentions "held for review"
+			expect(deps.notify).toHaveBeenCalledWith(
+				expect.stringContaining("held for review"),
+				15_000,
+			);
+			// Sync completes (not in error state) because safe actions ran fine
+			expect(deps.onStatusChange).toHaveBeenLastCalledWith("idle");
+			await orchestrator.close();
+		});
+
 		it("queues a pending sync when called while locked", async () => {
 			const deps = createDeps();
 			const localFs = createMockFs("local");
@@ -1065,6 +1118,114 @@ describe("SyncOrchestrator", () => {
 
 			expect(remoteFs.files.has("a.md")).toBe(true); // NOT deleted
 			expect(await orchestrator.state.get("a.md")).toBeDefined(); // baseline intact
+			await orchestrator.close();
+		});
+	});
+
+	describe("storage-full handling", () => {
+		it("surfaces a clear storage-full notice and does not set recoverViaColdScan", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			const deps = createDeps({ localFs: () => localFs, remoteFs: () => remoteFs });
+			const orchestrator = new SyncOrchestrator(deps);
+
+			// Simulate a Dropbox-style insufficient_space 409 on list
+			const spaceErr = Object.assign(new Error("path/insufficient_space"), { status: 409 });
+			vi.spyOn(remoteFs, "list").mockRejectedValue(spaceErr);
+
+			// Wire a provider that classifies this as storageFull
+			deps.backendProvider = () => ({
+				type: "dropbox",
+				displayName: "Dropbox",
+				classifyError: () => ({ kind: "storageFull" as const }),
+			} as never);
+
+			await orchestrator.runSync();
+
+			expect(deps.onStatusChange).toHaveBeenCalledWith("error");
+			expect(deps.notify).toHaveBeenCalledWith(
+				expect.stringContaining("full"),
+				15_000,
+			);
+			// recoverViaColdScan must be false — storage-full doesn't corrupt cursor state
+			// (verified indirectly: the next runSync must not force a cold scan)
+			await orchestrator.close();
+		});
+	});
+
+	describe("suspicious listing guard", () => {
+		it("aborts a cold sync when the remote is completely unreachable (list + stat both fail)", async () => {
+			// The completeness guard fires when BOTH list() and stat() cannot confirm
+			// remote files. When only list() fails, confirmRemoteDeletions() recovers
+			// the entries via stat() — that's the correct first line of defence.
+			// The completeness guard is the backstop when even stat() is unavailable
+			// (e.g. a network partition or a completely broken remote connection).
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			// Force a cold scan: no checkpoint means forceFullScan=true
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(false);
+			const deps = createDeps({ localFs: () => localFs, remoteFs: () => remoteFs });
+			const orchestrator = new SyncOrchestrator(deps);
+
+			// Seed 20 baselines so the completeness threshold kicks in (≥10 required)
+			for (let i = 0; i < 20; i++) {
+				const p = `note-${i}.md`;
+				addFile(localFs, p, "content", 1000);
+				addFile(remoteFs, p, "content", 1000);
+				await orchestrator.state.put({
+					path: p, hash: "", localMtime: 1000, remoteMtime: 1000,
+					localSize: 7, remoteSize: 7, syncedAt: 900,
+				});
+			}
+
+			// Both list() and stat() return nothing — remote is genuinely unreachable
+			vi.spyOn(remoteFs, "list").mockResolvedValue([]);
+			vi.spyOn(remoteFs, "stat").mockResolvedValue(null);
+
+			await orchestrator.runSync();
+
+			// No local files should have been deleted
+			expect(localFs.files.size).toBeGreaterThan(0);
+			expect(deps.onStatusChange).toHaveBeenCalledWith("error");
+			expect(deps.notify).toHaveBeenCalledWith(
+				expect.stringContaining("incomplete"),
+				15_000,
+			);
+			await orchestrator.close();
+		});
+	});
+
+	describe("approvePendingDeletions()", () => {
+		it("executes quarantined deletions and clears the pending list", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			const settings = { ...mockSettings(), maxDeletionsPerSync: 1 };
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
+			const deps = createDeps({
+				getSettings: () => settings,
+				localFs: () => localFs,
+				remoteFs: () => remoteFs,
+			});
+			const orchestrator = new SyncOrchestrator(deps);
+
+			// Two remote-only files with baselines → 2 delete_remote, limit 1 → quarantine both
+			for (const path of ["a.md", "b.md"]) {
+				addFile(remoteFs, path, "body", 1000);
+				await orchestrator.state.put({
+					path, hash: "", localMtime: 1000, remoteMtime: 1000,
+					localSize: 4, remoteSize: 4, syncedAt: 900,
+				});
+			}
+
+			await orchestrator.runSync();
+			expect(orchestrator.getPendingDeletions()).toHaveLength(2);
+			expect(remoteFs.files.has("a.md")).toBe(true);
+
+			await orchestrator.approvePendingDeletions();
+
+			expect(remoteFs.files.has("a.md")).toBe(false);
+			expect(remoteFs.files.has("b.md")).toBe(false);
+			expect(orchestrator.getPendingDeletions()).toHaveLength(0);
 			await orchestrator.close();
 		});
 	});

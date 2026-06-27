@@ -352,6 +352,7 @@ export function mockSettings(
 		// don't run under a configuration real users never have.
 		enableThreeWayMerge: true,
 		mobileMaxFileSizeMB: 10,
+		maxDeletionsPerSync: 20,
 		foregroundSyncCooldownSec: 60,
 		pauseSyncWhenOffline: true,
 		syncDebounceSec: 5,

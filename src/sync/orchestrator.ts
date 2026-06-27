@@ -19,7 +19,8 @@ import type { ConflictRecord, SyncStatus } from "./types";
 import { buildSyncRecord } from "./state-committer";
 import { CycleSummary } from "./sync-notification";
 import type { SyncCycleResult } from "./sync-notification";
-import { enforceDeletionLimit, MassDeletionBlockedError } from "./deletion-guard";
+import { splitPlanAtLimit, enforceListingCompleteness, SuspiciousListingError, DeletionVelocityTracker } from "./deletion-guard";
+import type { SyncAction } from "./types";
 
 export type { SyncStatus };
 
@@ -44,6 +45,8 @@ export interface SyncOrchestratorDeps {
 	recordConflicts?: (records: ConflictRecord[]) => Promise<void>;
 	/** Update the active conflict tracker dashboard file (sync-conflicts.md). */
 	updateConflictTracker?: (newConflictPaths: string[]) => Promise<void>;
+	/** Called when deletions are quarantined so the UI can surface an approve/reject action. */
+	onDeletionsHeld?: (held: SyncAction[]) => void;
 }
 
 const MAX_RETRIES = 3;
@@ -52,6 +55,9 @@ export class SyncOrchestrator {
 	private syncMutex = new AsyncMutex();
 	private stateStore: SyncStateStore;
 	private syncPending = false;
+	private readonly velocityTracker = new DeletionVelocityTracker();
+	/** Deletions quarantined by the limit or velocity guard, awaiting approval. */
+	private pendingDeletions: SyncAction[] = [];
 	/**
 	 * A cycle that ended with failures may have advanced the backend's in-memory
 	 * delta cursor past work it never committed (the committed checkpoint is held
@@ -90,6 +96,51 @@ export class SyncOrchestrator {
 		await this.stateStore.clear();
 	}
 
+	/** Returns the deletions currently quarantined by the limit or velocity guard. */
+	getPendingDeletions(): SyncAction[] {
+		return [...this.pendingDeletions];
+	}
+
+	/**
+	 * Execute all currently quarantined deletions unconditionally, then clear the
+	 * pending list. Also resets the velocity window so the approved count doesn't
+	 * immediately re-trigger the rolling cap. Call this from the settings UI
+	 * "Approve deletions" button.
+	 */
+	async approvePendingDeletions(): Promise<void> {
+		if (this.pendingDeletions.length === 0) return;
+		const localFs = this.deps.localFs();
+		const remoteFs = this.deps.remoteFs();
+		if (!localFs || !remoteFs) return;
+
+		const provider = this.deps.backendProvider();
+		const ctx: ExecutionContext = {
+			localFs,
+			remoteFs,
+			committer: {
+				stateStore: this.stateStore,
+				enableThreeWayMerge: this.deps.getSettings().enableThreeWayMerge,
+				localFs,
+				logger: this.deps.logger,
+			},
+			conflictStrategy: this.deps.getSettings().conflictStrategy,
+			onProgress: () => {},
+			logger: this.deps.logger,
+			classifyError: (err) => provider?.classifyError?.(err) ?? classifyHttpError(err),
+			transferPool: this.deps.isMobile() ? MOBILE_TRANSFER_POOL : DESKTOP_TRANSFER_POOL,
+		};
+
+		await this.syncMutex.run(async () => {
+			const result = await executePlan({ actions: this.pendingDeletions }, ctx);
+			this.deps.logger?.info("Approved pending deletions executed", {
+				succeeded: result.succeeded.length,
+				failed: result.failed.length,
+			});
+			this.pendingDeletions = [];
+			this.velocityTracker.reset();
+		});
+	}
+
 	shouldSync(): boolean {
 		const hasRemote = !!this.deps.remoteFs();
 		const isLocked = this.syncMutex.isLocked;
@@ -110,6 +161,10 @@ export class SyncOrchestrator {
 		if (path === INTERNAL_METADATA_PATH) return true;
 		// Exclude conflict tracker index
 		if (path === "sync-conflicts.md") return true;
+		// Exclude the plugin's own settings file: safety-critical config must not
+		// round-trip through sync/merge. Multi-device settings sync, if wanted, must
+		// use a separate explicitly-synced file rather than the active config.
+		if (path === ".obsidian/plugins/vaultbridge/data.json") return true;
 		// OS-generated junk (desktop.ini, thumbs.db, .DS_Store) is never synced on any
 		// backend — treated as non-existent like the reserved metadata path. Beyond
 		// being noise, some backends (Dropbox) reject these outright, which would
@@ -254,18 +309,22 @@ export class SyncOrchestrator {
 				};
 			} catch (err) {
 				lastError = err;
-				if (err instanceof MassDeletionBlockedError) {
+				if (err instanceof SuspiciousListingError) {
 					this.deps.onStatusChange("error");
 					this.deps.notify(
-						`Sync stopped: ${err.counts.total} deletions were planned (${err.counts.local} local, ${err.counts.remote} remote), above your limit of ${err.limit}. Review the affected devices, then change “Maximum deletions per sync” in Advanced settings if this was intentional.`,
+						`Sync stopped: the ${err.side} file listing looks incomplete ` +
+						`(${err.listedCount} of ${err.baselineCount} known files). ` +
+						`No changes were made. Try "Rescan" once the issue is resolved.`,
 						15_000,
 					);
-					this.deps.logger?.warn("Mass deletion plan blocked", {
-						limit: err.limit,
-						localDeletions: err.counts.local,
-						remoteDeletions: err.counts.remote,
+					this.deps.logger?.warn("Suspicious listing — sync aborted", {
+						side: err.side, listedCount: err.listedCount, baselineCount: err.baselineCount,
 					});
 					await this.deps.logger?.flush();
+					// Explicitly clear recoverViaColdScan: returning null early skips the
+					// normal `failed > 0` update in runSync, so without this the flag stays
+					// true and the next sync is cold again — triggering this error in a loop.
+					this.recoverViaColdScan = false;
 					return null;
 				}
 				// Classification is the backend's job (it knows its own error shapes,
@@ -282,9 +341,20 @@ export class SyncOrchestrator {
 				const decision = decideRetry(classification, attempt, MAX_RETRIES, Math.random);
 				if (decision.action === "abort") {
 					this.deps.onStatusChange("error");
-					this.deps.notify(decision.kind === "auth"
-						? "Authentication error. Please reconnect in settings."
-						: `Permission denied. Please check your ${provider?.displayName ?? "remote backend"} permissions.`);
+					if (classification.kind === "storageFull") {
+						// Storage-full is a clean abort: don't force a cold scan on the next
+						// cycle — the listing state is fine, the remote is just over quota.
+						this.recoverViaColdScan = false;
+						this.deps.notify(
+							`Sync stopped: your ${provider?.displayName ?? "remote storage"} is full. ` +
+							`Free up space, then tap "Sync now".`,
+							15_000,
+						);
+					} else {
+						this.deps.notify(decision.kind === "auth"
+							? "Authentication error. Please reconnect in settings."
+							: `Permission denied. Please check your ${provider?.displayName ?? "remote backend"} permissions.`);
+					}
 					return null;
 				}
 				// "stop" (e.g. 404) and "exhausted" both fall through to the generic
@@ -392,6 +462,16 @@ export class SyncOrchestrator {
 			this.deps.logger?.debug("Rename entry details", { entries: rpEntries });
 		}
 
+		// Cold scans are the post-failure recovery path: a truncated listing looks
+		// identical to "user deleted everything." Abort before planning when either
+		// side's listing is suspiciously sparse relative to the known baseline.
+		if (changeSet.temperature === "cold") {
+			const localCount = changeSet.entries.filter((e) => e.local && !e.local.isDirectory).length;
+			const remoteCount = changeSet.entries.filter((e) => e.remote && !e.remote.isDirectory).length;
+			const baselineCount = changeSet.entries.filter((e) => e.prevSync).length;
+			enforceListingCompleteness(localCount, remoteCount, baselineCount);
+		}
+
 		// Exclusion now happens at detection (collectChanges' isExcluded); this filter
 		// carries only the mobile file-size cap, applied after detection so an
 		// oversized file still gets a record-aware decision rather than vanishing.
@@ -433,9 +513,39 @@ export class SyncOrchestrator {
 			...actionBreakdown,
 		});
 
-		enforceDeletionLimit(plan, settings.maxDeletionsPerSync);
+		// Split deletions from safe actions. Over-limit or velocity-exceeding deletions
+		// are quarantined: the safe actions (pushes, pulls, merges) still execute this
+		// cycle, and the user is notified to approve the held deletions separately.
+		const plannedDeleteCount = plan.actions.filter(
+			(a) => a.action === "delete_local" || a.action === "delete_remote",
+		).length;
+		const velocityBlocked = plannedDeleteCount > 0 &&
+			this.velocityTracker.wouldExceedVelocityLimit(plannedDeleteCount);
+		const split = splitPlanAtLimit(
+			velocityBlocked ? { actions: plan.actions } : plan,
+			velocityBlocked ? 0 : settings.maxDeletionsPerSync,
+		);
 
-		const total = plan.actions.length;
+		if (split.hasHeld) {
+			this.pendingDeletions = split.held;
+			this.deps.logger?.warn("Deletions quarantined", {
+				held: split.held.length,
+				velocityBlocked,
+				safe: split.safe.actions.length,
+			});
+			this.deps.notify(
+				`${split.held.length} deletions held for review — safe changes synced. ` +
+				`Use "Approve held deletions" in settings to apply them.`,
+				15_000,
+			);
+			this.deps.onDeletionsHeld?.(split.held);
+		} else if (plannedDeleteCount > 0) {
+			// Deletions executed this cycle — record them for velocity tracking
+			this.velocityTracker.record(plannedDeleteCount);
+		}
+
+		const executionPlan = split.safe;
+		const total = executionPlan.actions.length;
 
 		const provider = this.deps.backendProvider();
 		const ctx: ExecutionContext = {
@@ -456,7 +566,7 @@ export class SyncOrchestrator {
 			transferPool: this.deps.isMobile() ? MOBILE_TRANSFER_POOL : DESKTOP_TRANSFER_POOL,
 		};
 
-		const result = await executePlan(plan, ctx);
+		const result = await executePlan(executionPlan, ctx);
 
 		// Persist backend state. commitCheckpoint advances the delta cursor (+ file map,
 		// atomically) only on a fully clean cycle; a partial sync keeps the prior cursor.

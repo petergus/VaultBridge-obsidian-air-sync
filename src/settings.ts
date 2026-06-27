@@ -70,11 +70,29 @@ export interface VaultBridgeSettings {
 	lastSyncedIdentity: string;
 }
 
+/**
+ * Dot-path subtrees that are always regenerable and should never consume remote
+ * quota. These are the defaults for new vaults; existing vaults get them added
+ * via `addMissingDefaultIgnorePatterns` in settings-normalize.ts.
+ *
+ * - `.obsidian/icons/**`  — icon-pack SVG files (Iconize, Simple Icons, Phosphor, …).
+ *   Thousands of files, often 50+ MB, rebuilt from the plugin registry on reinstall.
+ * - `.smart-env/**`       — Smart Connections embedding cache. Rebuilt from vault
+ *   notes on demand; grows without bound as notes are indexed.
+ * - `.obsidian/themes/**​/.git/**` — theme repos checked out with git. Dev artifacts
+ *   with no value in a sync target; also filled Dropbox quota in the Jun-23 incident.
+ */
+export const DEFAULT_IGNORE_PATTERNS: readonly string[] = [
+	".obsidian/icons/**",
+	".smart-env/**",
+	".obsidian/themes/**/.git/**",
+];
+
 export const DEFAULT_SETTINGS: VaultBridgeSettings = {
 	vaultId: "",
 	backendType: "googledrive",
 	conflictStrategy: "auto_merge",
-	ignorePatterns: [],
+	ignorePatterns: [...DEFAULT_IGNORE_PATTERNS],
 	syncDotPaths: [],
 	enableThreeWayMerge: true,
 	mobileMaxFileSizeMB: 10,

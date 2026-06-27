@@ -140,7 +140,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Maximum deletions per sync")
 			.setDesc(
-				"Stop the entire sync before it changes anything when more than this many local and remote deletions are planned. Set to 0 to disable. Renames do not count."
+				"Stop the entire sync before it changes anything when more than this many local and remote deletions are planned. Renames do not count. Minimum 1."
 			)
 			.addText((text) =>
 				text
@@ -148,7 +148,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 					.setValue(String(this.plugin.settings.maxDeletionsPerSync))
 					.onChange(async (value) => {
 						const num = parseInt(value, 10);
-						if (!isNaN(num) && num >= 0) {
+						if (!isNaN(num) && num >= 1) {
 							this.plugin.settings.maxDeletionsPerSync = num;
 							await this.plugin.saveSettings();
 						}
