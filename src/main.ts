@@ -14,6 +14,7 @@ import { LocalChangeTracker } from "./sync/local-tracker";
 import { Logger, getDeviceName } from "./logging/logger";
 import { ConflictHistory } from "./sync/conflict-history";
 import { ConflictTracker } from "./sync/conflict-tracker";
+import { handleOAuthProtocolCallback } from "./fs/oauth-callback-error";
 
 export default class VaultBridgePlugin extends Plugin {
 	settings!: VaultBridgeSettings;
@@ -145,17 +146,19 @@ export default class VaultBridgePlugin extends Plugin {
 		this.settingTab = new VaultBridgeSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
 
-		const completeAuthFromProtocol = (params: Record<string, string>) => {
-			if (!params.access_token && !params.code) {
-				new Notice("Authorization failed: no token or code received");
-				return;
-			}
-			// Synthetic URL to pass tokens/code to completeAuth(), which parses callback URL params
-			const url = new URL("https://callback");
-			for (const [key, value] of Object.entries(params)) {
-				url.searchParams.set(key, value);
-			}
-			void this.backendManager.completeBackendConnect(url.toString());
+		const completeAuthFromProtocol = (params: Record<string, string | undefined>) => {
+			const pendingState = this.settings.backendData.pendingAuthState;
+			handleOAuthProtocolCallback(params, pendingState, {
+				notify: (message) => {
+					new Notice(message);
+				},
+				completeConnect: (url) => {
+					void this.backendManager.completeBackendConnect(url);
+				},
+				completeFolderPick: (url, callbackParams) => {
+					void this.backendManager.completeBackendAuthFolderPick(url, callbackParams);
+				},
+			});
 		};
 
 		// OAuth callback via obsidian://vaultbridge-auth?access_token=...&state=... or ?code=...&state=...

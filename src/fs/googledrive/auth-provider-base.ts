@@ -4,7 +4,7 @@ import type { ISecretStore } from "../secret-store";
 import type { Logger } from "../../logging/logger";
 import type { IGoogleAuth } from "./auth";
 import type { GoogleDriveBackendData } from "./provider";
-import { setBackendSecret, getBackendSecret, hasBackendSecret } from "../token-store";
+import { setBackendSecret, getBackendSecret, hasBackendSecret, publishBackendSecret } from "../token-store";
 
 interface GoogleDriveTokens {
 	refreshToken: string;
@@ -115,7 +115,7 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 		backendData: Record<string, unknown>,
 	): Promise<Record<string, unknown>> {
 		const data = backendData as Partial<GoogleDriveBackendData & { pendingCodeVerifier?: string }>;
-		const auth = this.createAuthIfNeeded(backendData);
+		const auth = this.takeAuthForCompletion(backendData);
 		if (!auth) {
 			throw new Error("OAuth credentials are missing");
 		}
@@ -127,18 +127,28 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 			auth.setCodeVerifier(data.pendingCodeVerifier);
 		}
 
-		const params = parseAuthCallbackParams(input);
-		await auth.handleAuthCallback(params);
-		const tokens = auth.getTokenState();
+		try {
+			const params = parseAuthCallbackParams(input);
+			await auth.handleAuthCallback(params);
+			const tokens = auth.getTokenState();
+			const requiredRefresh = tokens.refreshToken || getBackendSecret(this.secretStore, this.backendType, "refresh");
 
-		// Store tokens in SecretStorage instead of returning them for backendData
-		storeGoogleDriveTokens(this.secretStore, this.backendType, tokens);
+			publishBackendSecret(this.secretStore, this.backendType, "refresh", requiredRefresh);
+			setBackendSecret(this.secretStore, this.backendType, "access", tokens.accessToken);
+			if (!tokens.refreshToken) {
+				auth.setTokens(requiredRefresh, tokens.accessToken, tokens.accessTokenExpiry);
+			}
+			this.googleAuth = auth;
 
-		return {
-			accessTokenExpiry: tokens.accessTokenExpiry,
-			pendingAuthState: "",
-			pendingCodeVerifier: "",
-		};
+			return {
+				accessTokenExpiry: tokens.accessTokenExpiry,
+				pendingAuthState: "",
+				pendingCodeVerifier: "",
+			};
+		} catch (err) {
+			this.googleAuth = null;
+			throw err;
+		}
 	}
 
 	/** Return the current in-memory token state (for persistence after refresh). */
@@ -158,10 +168,10 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 	 * Construct a backend-specific auth instance from the stored data. ALWAYS returns an
 	 * instance — the missing-credentials policy lives in {@link hasCredentials} /
 	 * {@link onMissingCredentials} and gates only the user-initiated start/complete
-	 * paths, so FS-creation and detached reads build unconditionally (as before). The
-	 * one factory replaces the four near-identical per-variant create methods.
+	 * actions. Other callers (e.g. settings renderers) are expected to build an auth and
+	 * let its own methods check for presence.
 	 */
-	protected abstract buildAuth(data: Record<string, unknown>, logger?: Logger): IGoogleAuth;
+	protected abstract buildAuth(backendData: Record<string, unknown>, logger?: Logger): IGoogleAuth;
 
 	/**
 	 * Whether `data` carries usable OAuth credentials. Built-in always does (it ships its
@@ -176,7 +186,8 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 	protected onMissingCredentials(): void {}
 
 	/**
-	 * Force-create a fresh auth instance for STARTING the flow (resets any prior PKCE
+	 * User-initiated start: checks credentials first and notifies if missing (returning
+	 * null so {@link startAuth} can abort cleanly without mutating stored/provisional
 	 * state). Returns null — after notifying — when credentials are missing.
 	 */
 	protected createAuth(backendData: Record<string, unknown>): IGoogleAuth | null {
@@ -188,18 +199,23 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 		return this.googleAuth;
 	}
 
-	/** Get-or-create for COMPLETING the flow. Returns null (silently) if creds are missing. */
-	protected createAuthIfNeeded(backendData: Record<string, unknown>): IGoogleAuth | null {
-		if (this.googleAuth) return this.googleAuth;
+	/**
+	 * Take the pending manager out of the reusable slot for completion. It remains
+	 * provisional until required credential publication succeeds.
+	 */
+	protected takeAuthForCompletion(backendData: Record<string, unknown>): IGoogleAuth | null {
+		const pending = this.googleAuth;
+		this.googleAuth = null;
 		if (!this.hasCredentials(backendData)) return null;
-		this.googleAuth = this.buildAuth(backendData);
-		return this.googleAuth;
+		return pending ?? this.buildAuth(backendData);
 	}
 
 	/** Get or create the SHARED GoogleAuth instance for FS creation. */
 	getOrCreateGoogleAuth(data: GoogleDriveBackendData, logger?: Logger): IGoogleAuth {
 		if (!this.googleAuth) {
-			this.googleAuth = this.buildAuth(data as unknown as Record<string, unknown>, logger);
+			this.googleAuth = this.wireRefreshPersistence(
+				this.buildAuth(data as unknown as Record<string, unknown>, logger),
+			);
 		}
 		return this.googleAuth;
 	}
@@ -209,21 +225,19 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 	 * display, folder pick) that must not reset the live sync's shared in-memory tokens.
 	 */
 	createDetachedGoogleAuth(data: GoogleDriveBackendData, logger?: Logger): IGoogleAuth {
-		return this.wireDetachedRefreshPersistence(
+		return this.wireRefreshPersistence(
 			this.buildAuth(data as unknown as Record<string, unknown>, logger),
 		);
 	}
 
 	/**
-	 * Wire a detached auth so a refresh that ROTATES the refresh token persists the
-	 * new value to SecretStorage. Without this, a rotated token would live only on
-	 * the throwaway instance and be discarded, leaving the stored (and shared
-	 * in-memory) token stale so the next real sync's refresh fails. Subclasses call
-	 * this on the instance they return from {@link createDetachedGoogleAuth}.
+	 * Wire any reusable auth so a rotated refresh token is proven in SecretStorage
+	 * before the response installs access, expiry, or refresh state. The same seam is
+	 * used by shared and detached instances.
 	 */
-	protected wireDetachedRefreshPersistence(auth: IGoogleAuth): IGoogleAuth {
+	protected wireRefreshPersistence(auth: IGoogleAuth): IGoogleAuth {
 		auth.setRefreshTokenRotatedHook((refreshToken) => {
-			setBackendSecret(this.secretStore, this.backendType, "refresh", refreshToken);
+			publishBackendSecret(this.secretStore, this.backendType, "refresh", refreshToken);
 		});
 		return auth;
 	}

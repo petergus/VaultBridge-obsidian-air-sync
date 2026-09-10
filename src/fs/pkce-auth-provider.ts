@@ -2,7 +2,7 @@ import { Notice, Platform } from "obsidian";
 import type { IAuthProvider } from "./auth";
 import type { ISecretStore } from "./secret-store";
 import type { Logger } from "../logging/logger";
-import { setBackendSecret, hasBackendSecret } from "./token-store";
+import { setBackendSecret, hasBackendSecret, publishBackendSecret } from "./token-store";
 import {
 	BaseOAuthTokenManager,
 	buildOAuthState,
@@ -63,7 +63,7 @@ export abstract class PkceAuthProvider<TAuth extends PkceTokenManager> implement
 	createDetachedAuth(logger?: Logger, clientId?: string): TAuth {
 		const actualClientId = clientId || this.clientId;
 		const auth = this.createAuth(actualClientId, logger ?? this.logger);
-		auth.setRefreshTokenRotatedHook((rt) => setBackendSecret(this.secretStore, this.backendType, "refresh", rt));
+		auth.setRefreshTokenRotatedHook((rt) => publishBackendSecret(this.secretStore, this.backendType, "refresh", rt));
 		return auth;
 	}
 
@@ -114,7 +114,7 @@ export abstract class PkceAuthProvider<TAuth extends PkceTokenManager> implement
 		const auth = this.getOrCreateAuth(undefined, customClientId);
 		await auth.exchangeCode(params.code, codeVerifier);
 		const tokens = auth.getTokenState();
-		setBackendSecret(this.secretStore, this.backendType, "refresh", tokens.refreshToken);
+		publishBackendSecret(this.secretStore, this.backendType, "refresh", tokens.refreshToken);
 		setBackendSecret(this.secretStore, this.backendType, "access", tokens.accessToken);
 
 		return { accessTokenExpiry: tokens.accessTokenExpiry, pendingAuthState: "", pendingCodeVerifier: "" };

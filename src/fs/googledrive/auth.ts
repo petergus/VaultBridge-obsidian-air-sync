@@ -18,7 +18,7 @@ export interface IGoogleAuth {
 	 * otherwise be discarded with the instance — leaving the shared/stored token
 	 * stale and failing the next real refresh.
 	 */
-	setRefreshTokenRotatedHook(cb: (refreshToken: string) => void): void;
+	setRefreshTokenRotatedHook(cb: (refreshToken: string) => void | Promise<void>): void;
 	readonly isAuthenticated: boolean;
 	getAuthorizationUrl(): Promise<string>;
 	getAuthState(): string | null;
@@ -115,7 +115,25 @@ export class GoogleAuth extends GoogleAuthBase {
 
 	getAuthorizationUrl(): Promise<string> {
 		const state = this.generateState();
+		return Promise.resolve(this.buildAuthorizationUrl(state));
+	}
 
+	/**
+	 * Build Google's top-level Picker authorization flow for desktop and mobile.
+	 * This avoids the cross-site iframe boundary used by PickerBuilder: Google owns
+	 * the full-page navigation and returns the selected id as `picked_file_ids`
+	 * alongside the authorization code.
+	 */
+	getFolderPickerAuthorizationUrl(): Promise<string> {
+		const state = this.generateState({ folderPick: true });
+		return Promise.resolve(this.buildAuthorizationUrl(state, {
+			trigger_onepick: "true",
+			allow_folder_selection: "true",
+			mimetypes: "application/vnd.google-apps.folder",
+		}));
+	}
+
+	private buildAuthorizationUrl(state: string, extra: Record<string, string> = {}): string {
 		const params = new URLSearchParams({
 			client_id: GOOGLE_DRIVE_AUTH.clientId,
 			redirect_uri: GOOGLE_DRIVE_AUTH.redirectUri,
@@ -124,8 +142,9 @@ export class GoogleAuth extends GoogleAuthBase {
 			access_type: "offline",
 			prompt: "consent",
 			state,
+			...extra,
 		});
-		return Promise.resolve(`${GOOGLE_AUTH_URL}?${params.toString()}`);
+		return `${GOOGLE_AUTH_URL}?${params.toString()}`;
 	}
 
 	/**
@@ -170,7 +189,7 @@ export class GoogleAuth extends GoogleAuthBase {
 
 			const token: unknown = response.json;
 			assertTokenResponse(token);
-			this.storeTokenResponse(token);
+			await this.storeTokenResponse(token);
 			return this.accessToken;
 		} catch (err) {
 			this.handleRefreshError(err);
@@ -269,7 +288,7 @@ export class GoogleAuthDirect extends GoogleAuthBase {
 
 			const token: unknown = response.json;
 			assertTokenResponse(token);
-			this.storeTokenResponse(token);
+			await this.storeTokenResponse(token);
 			this.clearAuthState();
 			this.logger?.debug("Token exchange successful");
 		} catch (err) {
@@ -296,7 +315,7 @@ export class GoogleAuthDirect extends GoogleAuthBase {
 
 			const token: unknown = response.json;
 			assertTokenResponse(token);
-			this.storeTokenResponse(token);
+			await this.storeTokenResponse(token);
 			return this.accessToken;
 		} catch (err) {
 			this.handleRefreshError(err);

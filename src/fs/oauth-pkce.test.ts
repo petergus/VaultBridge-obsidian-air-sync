@@ -69,7 +69,7 @@ class TestTokenManager extends BaseOAuthTokenManager {
 		this.refreshCount++;
 		await Promise.resolve();
 		if (this.error) this.handleRefreshError(this.error);
-		this.storeTokenResponse(this.response);
+		await this.storeTokenResponse(this.response);
 		return this.accessToken;
 	}
 }
@@ -151,7 +151,9 @@ describe("BaseOAuthTokenManager", () => {
 	it("fires the rotation hook only when the refresh token actually changes", async () => {
 		const rotated: string[] = [];
 		const m = new TestTokenManager();
-		m.setRefreshTokenRotatedHook((rt) => rotated.push(rt));
+		m.setRefreshTokenRotatedHook((rt) => {
+			rotated.push(rt);
+		});
 		m.setTokens("RT", "", 0);
 
 		// Same refresh token returned → no rotation.

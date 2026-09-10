@@ -134,7 +134,7 @@ export abstract class BaseOAuthTokenManager {
 	private refreshPromise: Promise<string> | null = null;
 	protected authFailedAt = 0;
 	protected logger?: Logger;
-	private onRefreshTokenRotated?: (refreshToken: string) => void;
+	private onRefreshTokenRotated?: (refreshToken: string) => void | Promise<void>;
 
 	setTokens(refreshToken: string, accessToken: string, expiry: number): void {
 		this.refreshToken = refreshToken;
@@ -143,7 +143,7 @@ export abstract class BaseOAuthTokenManager {
 		this.authFailedAt = 0;
 	}
 
-	setRefreshTokenRotatedHook(cb: (refreshToken: string) => void): void {
+	setRefreshTokenRotatedHook(cb: (refreshToken: string) => void | Promise<void>): void {
 		this.onRefreshTokenRotated = cb;
 	}
 
@@ -178,12 +178,10 @@ export abstract class BaseOAuthTokenManager {
 		if (this.refreshPromise) {
 			return this.refreshPromise;
 		}
-		this.refreshPromise = this.performRefresh();
-		try {
-			return await this.refreshPromise;
-		} finally {
+		this.refreshPromise = this.performRefresh().finally(() => {
 			this.refreshPromise = null;
-		}
+		});
+		return this.refreshPromise;
 	}
 
 	/** Perform the provider-specific token refresh and return the new access token. */
@@ -211,18 +209,17 @@ export abstract class BaseOAuthTokenManager {
 		throw err as Error;
 	}
 
-	/** Store tokens from a validated token response, notifying on rotation. */
-	protected storeTokenResponse(token: OAuthTokenResponse): void {
+	/** Store a validated response, publishing rotation before installing any field. */
+	protected async storeTokenResponse(token: OAuthTokenResponse): Promise<void> {
+		if (token.refresh_token) {
+			// Detect rotation before mutating the manager. The owning provider wires the
+			// same publication hook for shared and detached managers.
+			const rotated = !!this.refreshToken && token.refresh_token !== this.refreshToken;
+			if (rotated) await this.onRefreshTokenRotated?.(token.refresh_token);
+		}
 		this.accessToken = token.access_token;
 		this.accessTokenExpiry = Date.now() + token.expires_in * 1000;
-		if (token.refresh_token) {
-			// Detect rotation: the provider returned a refresh token different from the
-			// one we held. Fire the hook so a detached auth can persist it (a shared
-			// auth leaves the hook unset and persists via its own checkpoint path).
-			const rotated = !!this.refreshToken && token.refresh_token !== this.refreshToken;
-			this.refreshToken = token.refresh_token;
-			if (rotated) this.onRefreshTokenRotated?.(token.refresh_token);
-		}
+		if (token.refresh_token) this.refreshToken = token.refresh_token;
 		this.authFailedAt = 0;
 	}
 }

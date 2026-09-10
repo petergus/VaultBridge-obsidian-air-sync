@@ -28,6 +28,30 @@ export function setBackendSecret(store: ISecretStore, backendType: string, name:
 	}
 }
 
+/**
+ * Publish a required non-empty backend secret and prove the synchronous
+ * SecretStorage postcondition before the caller exposes dependent state.
+ */
+export function publishBackendSecret(
+	store: ISecretStore,
+	backendType: string,
+	name: string,
+	candidate: string,
+): void {
+	if (!candidate) {
+		throw new Error("Required refresh token is missing");
+	}
+	try {
+		store.setSecret(secretKey(backendType, name), candidate);
+		store.setSecret(legacySecretKey(backendType, name), candidate);
+		if (store.getSecret(secretKey(backendType, name)) !== candidate) {
+			throw new Error("readback mismatch");
+		}
+	} catch {
+		throw new Error("Secret credential could not be saved securely. Please try connecting again.");
+	}
+}
+
 /** Read an opaque backend secret, or `""` if absent. */
 export function getBackendSecret(store: ISecretStore, backendType: string, name: string): string {
 	return store.getSecret(secretKey(backendType, name)) ?? store.getSecret(legacySecretKey(backendType, name)) ?? "";

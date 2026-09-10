@@ -1,6 +1,5 @@
 import type { App } from "obsidian";
-import { Platform } from "obsidian";
-import type { IBackendProvider, WebFolderPicker } from "../backend";
+import type { IBackendProvider } from "../backend";
 import type { ISecretStore } from "../secret-store";
 import type { IFileSystem } from "../interface";
 import type { VaultBridgeSettings } from "../../settings";
@@ -24,32 +23,6 @@ import {
 	storeGoogleDriveTokens,
 	GOOGLE_DRIVE_SECRET_NAMES,
 } from "./auth-provider-base";
-
-/**
- * Web page (on the OAuth relay domain) that hosts the Google Picker. The plugin opens
- * it in the browser (it can't load the remote Picker SDK inside Obsidian); the page
- * bounces the selection back to `obsidian://air-sync-folder?id=…&name=…&state=…` (a
- * backend-agnostic scheme, not the auth one), mirroring the auth relay. The plugin's
- * current access token is passed in the URL fragment so the Picker can render the
- * user's Google Drive — the fragment never reaches the relay host.
- */
-const FOLDER_PICKER_URL = "https://airsync.takezo.dev/googledrive-folder";
-
-/**
- * Public Google Picker API key, passed to the host page as `?apiKey=` so the plugin
- * owns it (the page keeps an embedded copy only as a fallback). NOT a secret: locked
- * in Cloud Console to the Picker API + referrer `airsync.takezo.dev/*`.
- */
-const PICKER_API_KEY = "AIzaSyDyXTKejmlaTcBIDCx3lJYFhDMmyRKRZwc";
-
-/** Random hex nonce for the folder-pick CSRF `state`. */
-function randomState(): string {
-	const arr = new Uint8Array(24);
-	crypto.getRandomValues(arr);
-	let out = "";
-	for (const b of arr) out += b.toString(16).padStart(2, "0");
-	return out;
-}
 
 /** A Google Drive file id is a URL-safe base64 token; reject anything else so a crafted
  *  deep link can't inject path/query segments into the getFile URL. */
@@ -158,48 +131,6 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		return resolveGoogleDriveRemoteVault(client, vaultName, cachedFolderId, logger);
 	}
 
-	/**
-	 * Every Google Drive backend IS its own folder-pick capability — it implements both
-	 * halves directly. Exposing `this` (typed down to {@link WebFolderPicker}) lets
-	 * BackendManager treat the pair as one all-or-nothing capability (`provider.picker?.…`).
-	 */
-	get picker(): WebFolderPicker {
-		return this;
-	}
-
-	/**
-	 * Open the Google Picker (hosted on the relay domain) in the browser. The current
-	 * access token is passed in the URL fragment (never the query) so the Picker can
-	 * render the user's Google Drive without a second sign-in; the selection returns via
-	 * `obsidian://air-sync-folder` and is bound by {@link completeWebFolderPick}.
-	 * Returns the CSRF state to persist.
-	 */
-	async startWebFolderPick(settings: VaultBridgeSettings): Promise<Record<string, unknown>> {
-		// Auth-only gate (not isConnected): the picker needs a token, but it is also how
-		// a folder gets bound in the first place, so it must be openable before any
-		// remoteVaultFolderId exists.
-		if (!this.auth.isAuthenticated(settings.backendData ?? {})) {
-			throw new Error("Connect to Google Drive first.");
-		}
-		// Fetch the token on a DETACHED auth so a refresh for the picker doesn't reset
-		// the live sync's shared in-memory tokens.
-		const data = this.getData(settings);
-		const auth = this.auth.createDetachedGoogleAuth(data, undefined);
-		const tokens = readGoogleDriveTokens(this.secretStore, this.type);
-		auth.setTokens(tokens.refreshToken, tokens.accessToken, data.accessTokenExpiry);
-		const token = await auth.getAccessToken(false);
-
-		const state = randomState();
-		// apiKey in the query (public, referrer-restricted); token in the fragment so it
-		// never reaches the relay host — the fragment must stay last.
-		const url = `${FOLDER_PICKER_URL}?state=${encodeURIComponent(state)}&apiKey=${encodeURIComponent(PICKER_API_KEY)}#token=${encodeURIComponent(token)}`;
-		if (Platform.isMobile) {
-			window.location.href = url;
-		} else {
-			window.open(url);
-		}
-		return { pendingFolderPickState: state };
-	}
 
 	/**
 	 * Bind the vault to a folder picked via the Google Picker. Validates the CSRF
@@ -218,7 +149,14 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		if (!expectedState || params.state !== expectedState) {
 			throw new Error("State mismatch - possible CSRF attack");
 		}
-		const id = params.id?.trim();
+		const pickedIds = params.picked_file_ids
+			?.split(",")
+			.map((value) => value.trim())
+			.filter(Boolean);
+		if (pickedIds && pickedIds.length !== 1) {
+			throw new Error("Please select exactly one folder.");
+		}
+		const id = pickedIds?.[0] ?? params.id?.trim();
 		if (!id) throw new Error("No folder was selected.");
 		if (!GOOGLE_DRIVE_ID_RE.test(id)) throw new Error("Invalid folder id.");
 
