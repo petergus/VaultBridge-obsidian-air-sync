@@ -171,7 +171,7 @@ describe("SyncOrchestrator", () => {
 			expect(heldSpy).toHaveBeenCalledWith(
 				expect.arrayContaining([expect.objectContaining({ action: "delete_remote" })]),
 			);
-			expect(heldSpy.mock.calls[0][0]).toHaveLength(3);
+			expect(heldSpy.mock.calls[0]![0]).toHaveLength(3);
 			// User-facing notice mentions "held for review"
 			expect(deps.notify).toHaveBeenCalledWith(
 				expect.stringContaining("held for review"),

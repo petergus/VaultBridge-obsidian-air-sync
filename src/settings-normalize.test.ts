@@ -120,7 +120,7 @@ describe("addMissingDefaultIgnorePatterns", () => {
 
 	it("adds only the missing patterns when some are already present", () => {
 		const settings: VaultBridgeSettings = mockSettings({
-			ignorePatterns: [DEFAULT_IGNORE_PATTERNS[0]],
+			ignorePatterns: [DEFAULT_IGNORE_PATTERNS[0]!],
 		});
 		expect(addMissingDefaultIgnorePatterns(settings)).toBe(true);
 		for (const p of DEFAULT_IGNORE_PATTERNS) {
