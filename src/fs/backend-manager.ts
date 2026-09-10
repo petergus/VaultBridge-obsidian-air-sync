@@ -316,18 +316,24 @@ export class BackendManager {
 
 	/** Complete the auth flow with a code/token from the user */
 	async completeBackendConnect(code: string): Promise<void> {
-		if (this.connecting) return;
-		if (!this.backendProvider) {
-			this.deps.notify("Start the connection flow first");
+		if (this.connecting) {
+			this.deps.notify("Busy connecting — reopen the connection link in a moment.");
 			return;
 		}
 
 		const settings = this.deps.getSettings();
+		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
+		this.backendProvider = provider;
+		if (!provider) {
+			this.deps.notify("Start the connection flow first");
+			return;
+		}
+
 		this.connecting = true;
 
 		try {
 			const backendData = settings.backendData;
-			const updates = await this.backendProvider.auth.completeAuth(
+			const updates = await provider.auth.completeAuth(
 				code,
 				backendData,
 			);
@@ -346,7 +352,7 @@ export class BackendManager {
 			// No remote-vault binding here: after auth the user picks the folder
 			// explicitly (default-folder button or the Picker). createFs returns null
 			// until a folder is bound, so the settings UI shows the folder-choice state.
-			this.remoteFs = this.backendProvider.createFs(
+			this.remoteFs = provider.createFs(
 				this.deps.getApp(),
 				settings,
 				this.deps.getLogger()
@@ -356,15 +362,15 @@ export class BackendManager {
 				// Record the synced identity now so a later same-session target change
 				// (e.g. editing the custom folder id) is detected by the next
 				// initBackend, which then resets the stale baselines.
-				settings.lastSyncedIdentity = this.backendProvider.getIdentity(settings) ?? "";
+				settings.lastSyncedIdentity = provider.getIdentity(settings) ?? "";
 				await this.deps.saveSettings();
 			}
 
 			// On a fresh connect the remote FS is still null (no folder bound yet), so
 			// "Connected" alone reads as "done" and the user stops. Point them at the next step.
 			this.deps.notify(this.remoteFs
-				? `Connected to ${this.backendProvider.displayName}`
-				: `Connected to ${this.backendProvider.displayName} — choose a remote folder to start syncing`);
+				? `Connected to ${provider.displayName}`
+				: `Connected to ${provider.displayName} — choose a remote folder to start syncing`);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this.deps.getLogger().error("Authorization failed", { message: msg });
@@ -415,34 +421,44 @@ export class BackendManager {
 
 	/** Disconnect the current backend */
 	async disconnectBackend(): Promise<void> {
-		if (!this.backendProvider) return;
 		if (this.connecting) {
 			this.deps.notify("Busy connecting — try again in a moment.");
 			return;
 		}
 
 		const settings = this.deps.getSettings();
-		// Hold `connecting` across the teardown so a NEW sync can't start mid-disconnect.
-		// (An already-in-flight cycle isn't interrupted — it holds its own remoteFs ref;
-		// if it re-commits a checkpoint after the clear, the next reconnect's baseline is
-		// empty so collectChanges forces a COLD reconcile that ignores the stale cursor.)
+		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
+		this.backendProvider = provider;
+		if (!provider) return;
+
 		this.connecting = true;
+		this.deps.getLogger().info("Disconnecting backend", { backend: settings.backendType });
 		try {
 			// Discard this target's sync state so nothing stale survives a reconnect —
 			// before disconnect() resets backendData (resetAll keys the store off it).
-			await this.resetAll(settings);
+			try {
+				await this.resetAll(settings);
+			} catch (resetErr) {
+				this.deps.getLogger().warn("Failed to reset sync state during disconnect", {
+					error: resetErr instanceof Error ? resetErr.message : String(resetErr),
+				});
+			}
 
-			settings.backendData = await this.backendProvider.disconnect(settings);
+			settings.backendData = await provider.disconnect(settings);
 			// Forget the synced identity so a later reconnect (to any target) starts clean.
 			settings.lastSyncedIdentity = "";
 			await this.deps.saveSettings();
 
-			// Close the FS connection before dropping it — resetAll opened the store (via
-			// resetCheckpoint) to clear it, so nulling without close leaks it.
+			this.deps.notify(`Disconnected from ${provider.displayName}`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.deps.getLogger().error("Failed to disconnect backend cleanly", { message: msg });
+			this.deps.notify(`Disconnect error: ${msg}`);
+		} finally {
+			// Always close remote FS and trigger onDisconnected locally so state is never stuck
 			this.closeRemoteFs();
 			this.remoteFs = null;
 			this.deps.onDisconnected();
-		} finally {
 			this.connecting = false;
 		}
 

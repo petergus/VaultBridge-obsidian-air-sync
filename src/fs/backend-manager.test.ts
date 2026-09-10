@@ -239,6 +239,44 @@ describe("BackendManager — identity change triggers clearSyncBaseline", () => 
 		await mgr.disconnectBackend();
 		expect(settings.lastSyncedIdentity).toBe("");
 	});
+
+	it("resolves provider from registry on disconnect if not previously initialized", async () => {
+		const settings = mockSettings();
+		const deps = createDeps(settings);
+		const mgr = new BackendManager(deps);
+
+		// Note: initBackend() is NOT called before disconnectBackend()
+		await mgr.disconnectBackend();
+
+		expect(fakeProvider.disconnect).toHaveBeenCalled();
+		expect(deps.onDisconnected).toHaveBeenCalled();
+		expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("Disconnected from Test"));
+	});
+
+	it("gracefully tears down and notifies when provider.disconnect throws", async () => {
+		const settings = mockSettings();
+		fakeProvider.disconnect = vi.fn().mockRejectedValue(new Error("Network timeout during revocation"));
+		const deps = createDeps(settings);
+		const mgr = new BackendManager(deps);
+
+		await mgr.initBackend();
+		await mgr.disconnectBackend();
+
+		expect(deps.onDisconnected).toHaveBeenCalled();
+		expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("Disconnect error: Network timeout during revocation"));
+		expect(mgr.getRemoteFs()).toBeNull();
+	});
+
+	it("resolves provider from registry on completeBackendConnect if not previously initialized", async () => {
+		const settings = mockSettings();
+		const deps = createDeps(settings);
+		const mgr = new BackendManager(deps);
+
+		fakeProvider.auth.completeAuth = vi.fn().mockResolvedValue({});
+		await mgr.completeBackendConnect("auth-code");
+
+		expect(fakeProvider.auth.completeAuth).toHaveBeenCalledWith("auth-code", settings.backendData);
+	});
 });
 
 describe("BackendManager — auth error notification on initBackend", () => {

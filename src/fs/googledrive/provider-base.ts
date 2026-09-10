@@ -106,7 +106,7 @@ export abstract class GoogleDriveProviderBase implements IBackendProvider {
 		// clean or not: a refresh that already succeeded should not be discarded just
 		// because a later file op failed.)
 		const tokens = this.auth.getTokenState();
-		if (tokens && tokens.refreshToken) {
+		if (tokens && tokens.refreshToken && hasBackendSecret(this.secretStore, this.type, "refresh")) {
 			storeGoogleDriveTokens(this.secretStore, this.type, tokens);
 			result.accessTokenExpiry = tokens.accessTokenExpiry;
 		}

@@ -38,6 +38,7 @@ export default class VaultBridgePlugin extends Plugin {
 		const secretStore: ISecretStore = {
 			getSecret: (key) => this.app.secretStorage.getSecret(key),
 			setSecret: (key, value) => { this.app.secretStorage.setSecret(key, value); },
+			deleteSecret: (key) => { (this.app.secretStorage as unknown as { deleteSecret?: (k: string) => boolean }).deleteSecret?.(key); },
 		};
 		initRegistry(secretStore);
 
@@ -187,6 +188,13 @@ export default class VaultBridgePlugin extends Plugin {
 			name: "Sync now",
 			callback: () => {
 				void this.runSync();
+			},
+		});
+		this.addCommand({
+			id: "rescan-vault",
+			name: "Rescan vault (full reconcile)",
+			callback: () => {
+				void this.rescan();
 			},
 		});
 

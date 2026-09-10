@@ -30,9 +30,12 @@ export class IDBHelper {
 		}
 	}
 
-	private async doOpen(): Promise<void> {
-		const { dbName, version, onUpgrade } = this.config;
-		this.db = await new Promise<IDBDatabase>((resolve, reject) => {
+	private requestOpen(
+		dbName: string,
+		version: number,
+		onUpgrade: (db: IDBDatabase, oldVersion: number) => void,
+	): Promise<IDBDatabase> {
+		return new Promise<IDBDatabase>((resolve, reject) => {
 			const request = indexedDB.open(dbName, version);
 			request.onblocked = () => {
 				reject(new Error(`IndexedDB "${dbName}" is blocked by another connection`));
@@ -41,15 +44,53 @@ export class IDBHelper {
 				onUpgrade(request.result, event.oldVersion);
 			};
 			request.onsuccess = () => resolve(request.result);
-			request.onerror = () =>
-				reject(new Error(`Failed to open IndexedDB: ${request.error?.message ?? "unknown"}`));
+			request.onerror = () => {
+				const domError = request.error;
+				const error = new Error(`Failed to open IndexedDB: ${domError?.message ?? "unknown"}`);
+				if (domError?.name) {
+					error.name = domError.name;
+				}
+				reject(error);
+			};
 		});
+	}
+
+	private deleteDatabase(dbName: string): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			const request = indexedDB.deleteDatabase(dbName);
+			request.onsuccess = () => resolve();
+			request.onblocked = () => resolve();
+			request.onerror = () =>
+				reject(new Error(`Failed to delete IndexedDB "${dbName}": ${request.error?.message ?? "unknown"}`));
+		});
+	}
+
+	private async doOpen(): Promise<void> {
+		const { dbName, version, onUpgrade } = this.config;
+		try {
+			this.db = await this.requestOpen(dbName, version, onUpgrade);
+		} catch (err) {
+			const isVersionError =
+				err instanceof Error &&
+				(err.name === "VersionError" ||
+					err.message.includes("VersionError") ||
+					err.message.includes("less than the existing version"));
+			if (isVersionError) {
+				// Cold start: if existing DB version is higher than requested (e.g. rollback,
+				// downgrade, or another plugin's version collision), drop the obsolete DB and recreate fresh.
+				await this.deleteDatabase(dbName);
+				this.db = await this.requestOpen(dbName, version, onUpgrade);
+			} else {
+				throw err;
+			}
+		}
 		this.db.onversionchange = () => {
 			this.db?.close();
 			this.db = null;
 			this.openPromise = null;
 		};
 	}
+
 
 	async getDb(): Promise<IDBDatabase> {
 		await this.open();

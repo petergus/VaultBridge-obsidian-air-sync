@@ -1,5 +1,5 @@
 import type { FileEntity } from "../types";
-import { FOLDER_MIME, toRemoteChecksum } from "./types";
+import { FOLDER_MIME, toRemoteChecksum, isGoogleWorkspaceFile, buildWorkspaceStubContent } from "./types";
 import type { GoogleDriveFile } from "./types";
 import type { GoogleDriveClient } from "./client";
 import type { MetadataStore } from "../../store/metadata-store";
@@ -67,7 +67,32 @@ export class GoogleDriveFs extends CachingRemoteFs<GoogleDriveFile> {
 		return this.client.deleteFile(fileId);
 	}
 
-	// ── Mutating ops (Google Drive API + multi-parent handling) ──
+	// ── Read override for Google Workspace files ──
+
+	/**
+	 * Download file content — or synthesize a `.url` stub for Google Workspace
+	 * files (Docs/Sheets/Slides/…). These files have no downloadable binary
+	 * body (`files.get?alt=media` returns 403), so we generate an Internet
+	 * Shortcut containing the browser-open URL instead.
+	 *
+	 * For normal files, delegates to the base class which splits mutex + download.
+	 */
+	async read(path: string): Promise<ArrayBuffer> {
+		path = normalizeSyncPath(path);
+		// Quick check under the mutex: is this a workspace file?
+		const workspaceContent = await this.cacheMutex.run(async () => {
+			await this.ensureInitialized();
+			const file = this.cache.getFile(path);
+			if (file && isGoogleWorkspaceFile(file)) {
+				return buildWorkspaceStubContent(file);
+			}
+			return null;
+		});
+		if (workspaceContent) return workspaceContent;
+		// Normal file — delegate to base class (phase-split: mutex → download).
+		return super.read(path);
+	}
+
 
 	async write(
 		path: string,

@@ -65,6 +65,10 @@ export function hasBackendSecret(store: ISecretStore, backendType: string, name:
 /** Clear the named backend secrets. */
 export function clearBackendSecrets(store: ISecretStore, backendType: string, names: string[]): void {
 	for (const name of names) {
+		if (store.deleteSecret) {
+			store.deleteSecret(secretKey(backendType, name));
+			store.deleteSecret(legacySecretKey(backendType, name));
+		}
 		store.setSecret(secretKey(backendType, name), "");
 		store.setSecret(legacySecretKey(backendType, name), "");
 	}

@@ -47,4 +47,15 @@ describe("backend secret store", () => {
 		expect(getBackendSecret(store, "googledrive", "refresh")).toBe("legacy");
 		expect(hasBackendSecret(store, "googledrive", "refresh")).toBe(true);
 	});
+
+	it("invokes deleteSecret if supported by the store when clearing secrets", () => {
+		const deletedKeys: string[] = [];
+		const store = {
+			...createMockSecretStore(),
+			deleteSecret: (key: string) => { deletedKeys.push(key); },
+		};
+		clearBackendSecrets(store, "googledrive", ["refresh"]);
+		expect(deletedKeys).toContain("vaultbridge-googledrive-refresh-token");
+		expect(deletedKeys).toContain("air-sync-googledrive-refresh-token");
+	});
 });

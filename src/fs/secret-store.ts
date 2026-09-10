@@ -6,4 +6,5 @@
 export interface ISecretStore {
 	getSecret(key: string): string | null;
 	setSecret(key: string, value: string): void;
+	deleteSecret?(key: string): void;
 }

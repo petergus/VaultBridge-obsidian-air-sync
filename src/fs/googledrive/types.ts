@@ -4,6 +4,59 @@ import type { RemoteChecksum } from "../types";
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /**
+ * Native Google Workspace MIME types that have no downloadable binary body.
+ * These files live entirely in the cloud; `files.get?alt=media` returns 403.
+ * The map value is the URL-base used to open the file in the browser.
+ */
+export const GOOGLE_WORKSPACE_MIMES: ReadonlyMap<string, string> = new Map([
+	["application/vnd.google-apps.document", "https://docs.google.com/document/d/"],
+	["application/vnd.google-apps.spreadsheet", "https://docs.google.com/spreadsheets/d/"],
+	["application/vnd.google-apps.presentation", "https://docs.google.com/presentation/d/"],
+	["application/vnd.google-apps.drawing", "https://docs.google.com/drawings/d/"],
+	["application/vnd.google-apps.form", "https://docs.google.com/forms/d/"],
+	["application/vnd.google-apps.site", "https://sites.google.com/d/"],
+	["application/vnd.google-apps.jam", "https://jamboard.google.com/d/"],
+]);
+
+/** Returns true when the file is a cloud-native Google Workspace document (not a folder). */
+export function isGoogleWorkspaceFile(file: GoogleDriveFile): boolean {
+	return GOOGLE_WORKSPACE_MIMES.has(file.mimeType);
+}
+
+/**
+ * Build the browser-open URL for a Google Workspace file.
+ * Returns `null` for non-workspace files.
+ */
+export function googleWorkspaceUrl(file: GoogleDriveFile): string | null {
+	const base = GOOGLE_WORKSPACE_MIMES.get(file.mimeType);
+	if (!base) return null;
+	return `${base}${file.id}/edit`;
+}
+
+/**
+ * Generate the content of a `.url` Internet Shortcut stub file for a Google
+ * Workspace file. Returns the content as a UTF-8 encoded ArrayBuffer so it can
+ * be returned from `read()` / written by the sync engine as-is.
+ */
+export function buildWorkspaceStubContent(file: GoogleDriveFile): ArrayBuffer {
+	const url = googleWorkspaceUrl(file);
+	if (!url) throw new Error(`Not a Google Workspace file: ${file.mimeType}`);
+	const text = `[InternetShortcut]\r\nURL=${url}\r\n`;
+	return new TextEncoder().encode(text).buffer.slice(0);
+}
+
+/**
+ * Derive a synthetic remote checksum for a Google Workspace file stub.
+ * Content changes don't alter the stub (it's just a URL), but the file's
+ * identity (id + mimeType) determines whether the stub needs to be created
+ * or updated. Using `opaque` algo since this isn't reproducible from local
+ * file content.
+ */
+export function workspaceStubChecksum(file: GoogleDriveFile): RemoteChecksum {
+	return { algo: "opaque", value: `workspace:${file.id}:${file.mimeType}` };
+}
+
+/**
  * Hard cap on pagination drain loops (full list and changes.list). At pageSize
  * 1000 this is 10M entries — beyond any real vault — so reaching it means the
  * server isn't clearing its page token; we throw instead of looping forever.

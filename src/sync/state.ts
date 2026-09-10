@@ -2,7 +2,7 @@ import type { RenamePair, SyncRecord } from "./types";
 import { IDBHelper, sanitizeDbName } from "../store/idb-helper";
 import { encodeContent, decodeContent } from "../store/content-codec";
 
-const DB_NAME_PREFIX = "air-sync";
+const DB_NAME_PREFIX = "vaultbridge";
 const STORE_NAME = "sync-records";
 const CONTENT_STORE_NAME = "sync-content";
 // v4: SyncRecord checksum moved from backendMeta.contentChecksum to a typed

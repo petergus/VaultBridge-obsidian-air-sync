@@ -368,4 +368,35 @@ describe("GoogleDriveProvider.getRemoteVaultDisplayPath", () => {
 		expect(await provider.getRemoteVaultDisplayPath(settingsWith({}))).toBeNull();
 		expect(spy).not.toHaveBeenCalled();
 	});
+
+	it("readBackendState skips re-storing tokens if secretStore has been cleared (disconnected)", async () => {
+		const { provider, store } = await makeProvider(CONNECTED);
+		// Simulate auth having in-memory tokens
+		provider.auth.getOrCreateGoogleAuth(settingsWith().backendData as any);
+		(provider.auth as any).googleAuth.setTokens("RT-stale", "AT-stale", 123456);
+
+		// Clear secrets as disconnect would do
+		store.setSecret("air-sync-googledrive-refresh-token", "");
+		store.setSecret("vaultbridge-googledrive-refresh-token", "");
+
+		const state = provider.readBackendState();
+		expect(state).toEqual({});
+		expect(store.getSecret("vaultbridge-googledrive-refresh-token")).toBe("");
+		expect(store.getSecret("air-sync-googledrive-refresh-token")).toBe("");
+	});
+
+	it("revokeAuth revokes stored token even if googleAuth was not instantiated", async () => {
+		const spy = await spyRequestUrl();
+		spy.mockResolvedValue(mockRes({}));
+		const { provider } = await makeProvider(CONNECTED);
+
+		// googleAuth is null initially on provider.auth
+		await provider.auth.revokeAuth();
+
+		expect(spy).toHaveBeenCalledTimes(1);
+		const call = spy.mock.calls[0]?.[0] as { url: string };
+		expect(call.url).toContain("https://oauth2.googleapis.com/revoke?token=RT");
+		spy.mockRestore();
+	});
 });
+

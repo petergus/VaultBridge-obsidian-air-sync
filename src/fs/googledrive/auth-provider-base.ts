@@ -1,4 +1,4 @@
-import { Notice, Platform } from "obsidian";
+import { Notice, Platform, requestUrl } from "obsidian";
 import type { IAuthProvider } from "../auth";
 import type { ISecretStore } from "../secret-store";
 import type { Logger } from "../../logging/logger";
@@ -133,6 +133,12 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 			const tokens = auth.getTokenState();
 			const requiredRefresh = tokens.refreshToken || getBackendSecret(this.secretStore, this.backendType, "refresh");
 
+			if (!requiredRefresh) {
+				throw new Error(
+					"No refresh token received. If reconnecting, please revoke VaultBridge access in your Google Account security settings and try again.",
+				);
+			}
+
 			publishBackendSecret(this.secretStore, this.backendType, "refresh", requiredRefresh);
 			setBackendSecret(this.secretStore, this.backendType, "access", tokens.accessToken);
 			if (!tokens.refreshToken) {
@@ -160,6 +166,20 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 	async revokeAuth(): Promise<void> {
 		if (this.googleAuth) {
 			await this.googleAuth.revokeToken();
+		} else {
+			const tokens = readGoogleDriveTokens(this.secretStore, this.backendType);
+			const token = tokens.refreshToken || tokens.accessToken;
+			if (token) {
+				try {
+					await requestUrl({
+						url: `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`,
+						method: "POST",
+						headers: { "Content-Type": "application/x-www-form-urlencoded" },
+					});
+				} catch {
+					/* non-fatal */
+				}
+			}
 		}
 		this.googleAuth = null;
 	}

@@ -238,8 +238,10 @@ export class SyncOrchestrator {
 	}
 
 	async clearSyncState(): Promise<void> {
-		this.deps.logger?.info("Clearing sync state");
-		await this.stateStore.clear();
+		await this.syncMutex.run(async () => {
+			this.deps.logger?.info("Clearing sync state");
+			await this.stateStore.clear();
+		});
 	}
 
 	/** Returns the deletions currently quarantined by the limit or velocity guard. */
@@ -743,14 +745,17 @@ export class SyncOrchestrator {
 			await remoteFs.checkpoint.commitCheckpoint({ scopeFingerprint });
 		}
 		// readBackendState now persists only non-secret token state (the cursor lives
-		// in the backend store, committed above) — safe to run every cycle.
-		if (provider?.readBackendState) {
-			settings.backendData = {
-				...settings.backendData,
-				...provider.readBackendState(),
-			};
+		// in the backend store, committed above) — safe to run every cycle as long as
+		// the backend is still connected and not tearing down.
+		if (this.deps.remoteFs() && !this.deps.isBackendConnecting?.()) {
+			if (provider?.readBackendState) {
+				settings.backendData = {
+					...settings.backendData,
+					...provider.readBackendState(),
+				};
+			}
+			await this.deps.saveSettings();
 		}
-		await this.deps.saveSettings();
 
 		return result;
 	}

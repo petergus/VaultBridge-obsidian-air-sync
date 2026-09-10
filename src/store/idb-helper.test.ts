@@ -63,6 +63,37 @@ describe("IDBHelper", () => {
 		expect(db).toBeTruthy();
 	});
 
+	it("recovers from VersionError by deleting old db and reopening fresh", async () => {
+		const dbName = `test-version-downgrade-${Math.random()}`;
+		// Pre-create DB at version 8
+		await new Promise<void>((resolve, reject) => {
+			const req = indexedDB.open(dbName, 8);
+			req.onupgradeneeded = () => {
+				req.result.createObjectStore("items", { keyPath: "id" });
+			};
+			req.onsuccess = () => {
+				req.result.close();
+				resolve();
+			};
+			req.onerror = () => reject(req.error);
+		});
+
+		// Now open with IDBHelper configured at version 5
+		helper = new IDBHelper({
+			dbName,
+			version: 5,
+			onUpgrade: (db) => {
+				if (!db.objectStoreNames.contains("items")) {
+					db.createObjectStore("items", { keyPath: "id" });
+				}
+			},
+		});
+
+		await helper.open();
+		const db = await helper.getDb();
+		expect(db.version).toBe(5);
+	});
+
 	it("recovers when transaction() throws 'connection is closing'", async () => {
 		const h = createHelper();
 		await h.runTransaction("items", "readwrite", (tx) => {
