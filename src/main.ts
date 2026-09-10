@@ -71,6 +71,11 @@ export default class VaultBridgePlugin extends Plugin {
 				this.syncStatus = "not_connected";
 				this.updateStatusBar();
 			},
+			// A remote target was just bound mid-session — run the first sync now so
+			// files start transferring without waiting for an incidental foreground/vault/online event.
+			onRemoteBound: () => {
+				void this.runSync();
+			},
 			clearSyncBaseline: async () => {
 				await this.orchestrator?.clearSyncState();
 			},

@@ -42,6 +42,7 @@ function createDeps(
 		getVaultName: () => "Test Vault",
 		onConnected: vi.fn(),
 		onDisconnected: vi.fn(),
+		onRemoteBound: vi.fn(),
 		clearSyncBaseline: vi.fn().mockResolvedValue(undefined),
 		notify: vi.fn(),
 		refreshSettingsDisplay: vi.fn(),
@@ -843,5 +844,75 @@ describe("BackendManager — isConnecting flag", () => {
 
 		resolve();
 		await completePromise;
+	});
+
+	describe("onRemoteBound trigger", () => {
+		it("fires onRemoteBound after initBackend builds an FS", async () => {
+			const settings = mockSettings();
+			const onRemoteBound = vi.fn();
+			const deps = createDeps(settings, { onRemoteBound });
+			const mgr = new BackendManager(deps);
+
+			await mgr.initBackend();
+
+			expect(onRemoteBound).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not fire onRemoteBound when initBackend builds no FS", async () => {
+			const settings = mockSettings();
+			fakeProvider.isConnected = () => false;
+			fakeProvider.createFs = () => null;
+			const deps = createDeps(settings);
+			const mgr = new BackendManager(deps);
+
+			await mgr.initBackend();
+
+			expect(deps.onRemoteBound).not.toHaveBeenCalled();
+		});
+
+		it("fires onRemoteBound only after connecting is cleared", async () => {
+			const settings = mockSettings();
+			let mgr!: BackendManager;
+			let connectingAtCall: boolean | null = null;
+			const onRemoteBound = vi.fn(() => {
+				connectingAtCall = mgr.isConnecting();
+			});
+			mgr = new BackendManager(createDeps(settings, { onRemoteBound }));
+
+			await mgr.initBackend();
+
+			expect(onRemoteBound).toHaveBeenCalledTimes(1);
+			expect(connectingAtCall).toBe(false);
+		});
+
+		it("fires onRemoteBound on a reconnect that rebuilds a bound FS", async () => {
+			const settings = mockSettings();
+			const deps = createDeps(settings);
+			const mgr = new BackendManager(deps);
+			await mgr.initBackend();
+			(deps.onRemoteBound as ReturnType<typeof vi.fn>).mockClear();
+			fakeProvider.auth.completeAuth = () => Promise.resolve({});
+
+			await mgr.completeBackendConnect("auth-code");
+
+			expect(deps.onRemoteBound).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not fire onRemoteBound on a fresh connect with no folder bound, and prompts next step", async () => {
+			const settings = mockSettings();
+			fakeProvider.createFs = () => null;
+			const deps = createDeps(settings);
+			const mgr = new BackendManager(deps);
+			await mgr.initBackend();
+			(deps.onRemoteBound as ReturnType<typeof vi.fn>).mockClear();
+			fakeProvider.auth.completeAuth = () => Promise.resolve({});
+
+			await mgr.completeBackendConnect("auth-code");
+
+			expect(deps.onRemoteBound).not.toHaveBeenCalled();
+			expect(deps.notify).toHaveBeenCalledWith(
+				"Connected to Test — choose a remote folder to start syncing",
+			);
+		});
 	});
 });

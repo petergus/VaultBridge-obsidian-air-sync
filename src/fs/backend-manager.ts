@@ -14,6 +14,15 @@ export interface BackendManagerDeps {
 	getVaultName: () => string;
 	onConnected: (remoteFs: IFileSystem) => void;
 	onDisconnected: () => void;
+	/**
+	 * Fired once a remote target has just been bound and `connecting` is already
+	 * cleared, so the owner can run the first sync of this binding (issue #33).
+	 * Distinct from `onConnected` (which fires mid-connect, while `isConnecting()`
+	 * is still true and would gate a sync out): this is the after-the-fact signal
+	 * that syncing is now possible. The owner routes it through the error-catching
+	 * runSync wrapper, so a failed first sync resolves to a terminal status.
+	 */
+	onRemoteBound: () => void;
 	/** Clear the per-vault SyncRecord baseline (e.g. on identity change / connect / teardown). */
 	clearSyncBaseline: () => Promise<void>;
 	notify: (message: string) => void;
@@ -110,6 +119,15 @@ export class BackendManager {
 		} finally {
 			this.connecting = false;
 		}
+
+		// A freshly built remote FS means a bind (or a startup restore) just made
+		// syncing possible. Hand that transition to the owner so the first sync runs
+		// now, instead of waiting for an incidental foreground/vault/online event
+		// (issue #33). Fired AFTER the finally so `connecting` is already false —
+		// calling it while still mid-connect would be swallowed by the orchestrator's
+		// isBackendConnecting guard. Harmless when nothing needs doing: runSync
+		// coalesces or no-ops per its own gates.
+		if (this.remoteFs) this.deps.onRemoteBound();
 	}
 
 	/**
@@ -295,9 +313,11 @@ export class BackendManager {
 				await this.deps.saveSettings();
 			}
 
-			this.deps.notify(
-				`Connected to ${this.backendProvider.displayName}`
-			);
+			// On a fresh connect the remote FS is still null (no folder bound yet), so
+			// "Connected" alone reads as "done" and the user stops. Point them at the next step.
+			this.deps.notify(this.remoteFs
+				? `Connected to ${this.backendProvider.displayName}`
+				: `Connected to ${this.backendProvider.displayName} — choose a remote folder to start syncing`);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this.deps.getLogger().error("Authorization failed", { message: msg });
@@ -308,6 +328,10 @@ export class BackendManager {
 
 		// Refresh once here (runs on both success and error paths after the finally).
 		this.deps.refreshSettingsDisplay();
+
+		// A reconnect that kept its bound folder id rebuilds the FS inline above —
+		// no initBackend, so request the first sync here. `connecting` is already false.
+		if (this.remoteFs) this.deps.onRemoteBound();
 	}
 
 	/** Close the current FS's connections, swallowing errors (best-effort teardown). */
