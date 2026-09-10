@@ -1126,3 +1126,71 @@ describe("GoogleDriveFs ignores .airsync/metadata.json (backend-internal)", () =
 		expect(children).toContain(".airsync/logs");
 	});
 });
+
+describe("GoogleDriveFs getWebUrl", () => {
+	const FOLDER = "application/vnd.google-apps.folder";
+
+	function makeFsWithItems() {
+		const mockClient = {
+			listAllFiles: vi.fn().mockResolvedValue([
+				{ id: "folder1", name: "Projects", mimeType: FOLDER, parents: ["rootFolderId"] },
+				{ id: "note1", name: "plan.md", mimeType: "text/markdown", parents: ["folder1"] },
+				{ id: "doc1", name: "Meeting", mimeType: "application/vnd.google-apps.document", parents: ["folder1"] },
+				{ id: "sheet1", name: "Budget.gsheet", mimeType: "application/vnd.google-apps.spreadsheet", parents: ["rootFolderId"] },
+			]),
+			getChangesStartToken: vi.fn().mockResolvedValue("token1"),
+		} as never;
+		return { mockClient };
+	}
+
+	it("returns drive folder URL for the root folder", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const { mockClient } = makeFsWithItems();
+		const fs = new GoogleDriveFs(mockClient, "rootFolderId");
+
+		expect(await fs.getWebUrl("")).toBe("https://drive.google.com/drive/folders/rootFolderId");
+		expect(await fs.getWebUrl("/")).toBe("https://drive.google.com/drive/folders/rootFolderId");
+	});
+
+	it("returns drive folder URL for subfolders", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const { mockClient } = makeFsWithItems();
+		const fs = new GoogleDriveFs(mockClient, "rootFolderId");
+		await fs.list(); // populate cache
+
+		expect(await fs.getWebUrl("Projects")).toBe("https://drive.google.com/drive/folders/folder1");
+	});
+
+	it("returns file view URL for regular files", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const { mockClient } = makeFsWithItems();
+		const fs = new GoogleDriveFs(mockClient, "rootFolderId");
+		await fs.list(); // populate cache
+
+		expect(await fs.getWebUrl("Projects/plan.md")).toBe("https://drive.google.com/file/d/note1/view");
+	});
+
+	it("returns Google Docs edit URL for Google Workspace docs", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const { mockClient } = makeFsWithItems();
+		const fs = new GoogleDriveFs(mockClient, "rootFolderId");
+		await fs.list(); // populate cache
+
+		// Cached path includes .gdoc extension
+		expect(await fs.getWebUrl("Projects/Meeting.gdoc")).toBe("https://docs.google.com/document/d/doc1/edit");
+		// Querying without .gdoc suffix also resolves via candidate extension
+		expect(await fs.getWebUrl("Projects/Meeting")).toBe("https://docs.google.com/document/d/doc1/edit");
+
+		expect(await fs.getWebUrl("Budget.gsheet")).toBe("https://docs.google.com/spreadsheets/d/sheet1/edit");
+	});
+
+	it("returns null for non-existent or unsynced items", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const { mockClient } = makeFsWithItems();
+		const fs = new GoogleDriveFs(mockClient, "rootFolderId");
+		await fs.list(); // populate cache
+
+		expect(await fs.getWebUrl("Projects/unsynced.md")).toBeNull();
+		expect(await fs.getWebUrl("NonExistentFolder")).toBeNull();
+	});
+});

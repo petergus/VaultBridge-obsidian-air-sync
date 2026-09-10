@@ -4,6 +4,7 @@ import {
 	FOLDER_MIME,
 	toRemoteChecksum,
 	isGoogleWorkspaceFile,
+	googleWorkspaceExtension,
 	workspaceStubChecksum,
 	buildWorkspaceStubContent,
 } from "./types";
@@ -18,9 +19,9 @@ export type { FileChangeResult } from "../caching/metadata-cache";
  * `FileEntity` with Google Drive's md5 checksum and `googleDriveId`.
  *
  * Google Workspace files (Docs, Sheets, Slides, …) are stored in the cache
- * with a `.url` extension appended to their name — the path key itself is
- * `"Meeting Notes.url"`, not `"Meeting Notes"`. This means stat/read/list all
- * see consistent `.url` paths without needing a path-translation layer.
+ * with their native shortcut extension appended to their name (e.g.
+ * `"Meeting Notes.gdoc"`, `"Budget.gsheet"`). This allows Obsidian plugins like
+ * GDocs to open and embed them directly.
  */
 export class GoogleDriveMetadataCache extends AbstractMetadataCache<GoogleDriveFile> {
 	protected extractId(file: GoogleDriveFile): string {
@@ -32,12 +33,15 @@ export class GoogleDriveMetadataCache extends AbstractMetadataCache<GoogleDriveF
 	}
 
 	/**
-	 * The entry's own name. Google Workspace files get a `.url` suffix so the
-	 * cache path matches the local stub filename (e.g. "Meeting Notes.url").
+	 * The entry's own name. Google Workspace files get their native shortcut
+	 * extension (.gdoc, .gsheet, etc.) so the cache path matches the local
+	 * stub filename and Obsidian plugins (such as GDocs) can open them directly.
 	 */
 	protected extractName(file: GoogleDriveFile): string {
-		if (isGoogleWorkspaceFile(file)) {
-			return `${file.name}.url`;
+		const ext = googleWorkspaceExtension(file);
+		if (ext) {
+			const suffix = `.${ext}`;
+			return file.name.toLowerCase().endsWith(suffix) ? file.name : `${file.name}${suffix}`;
 		}
 		return file.name;
 	}
@@ -53,7 +57,7 @@ export class GoogleDriveMetadataCache extends AbstractMetadataCache<GoogleDriveF
 	 *
 	 * Google Workspace files use a synthetic identity-based checksum (they have
 	 * no md5 from the API) and their size is the stub content byte length.
-	 * The path already has `.url` appended (see {@link extractName}).
+	 * The path already has .gdoc/.gsheet appended (see {@link extractName}).
 	 */
 	toEntity(path: string, googleDriveFile: GoogleDriveFile): FileEntity {
 		if (this.isFolder(path)) {

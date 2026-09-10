@@ -29,7 +29,12 @@ export const requestUrl = (_opts: unknown): Promise<unknown> => {
 };
 
 export class Notice {
-	constructor(_message: string, _timeout?: number) {}
+	static lastNotice: string | null = null;
+	message: string;
+	constructor(message: string, _timeout?: number) {
+		this.message = message;
+		Notice.lastNotice = message;
+	}
 }
 
 /**
@@ -409,5 +414,53 @@ export class PluginSettingTab {
 	display() {}
 	get containerEl(): HTMLElement {
 		return document.createElement("div");
+	}
+}
+
+export class MenuItem {
+	title = "";
+	icon = "";
+	section = "";
+	callback: ((evt?: unknown) => unknown) | null = null;
+
+	setTitle(title: string) {
+		this.title = title;
+		return this;
+	}
+	setIcon(icon: string) {
+		this.icon = icon;
+		return this;
+	}
+	setSection(section: string) {
+		this.section = section;
+		return this;
+	}
+	onClick(cb: (evt?: unknown) => unknown) {
+		this.callback = cb;
+		return this;
+	}
+}
+
+export class Menu {
+	items: MenuItem[] = [];
+
+	addItem(cb: (item: MenuItem) => unknown): this {
+		const item = new MenuItem();
+		(item as unknown as { menu: Menu }).menu = this;
+		cb(item);
+		this.items.push(item);
+		return this;
+	}
+
+	addSeparator(): this {
+		return this;
+	}
+
+	showAtMouseEvent(_evt: MouseEvent): this {
+		return this;
+	}
+
+	showAtPosition(_pos: unknown, _doc?: Document): this {
+		return this;
 	}
 }

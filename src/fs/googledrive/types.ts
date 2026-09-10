@@ -4,23 +4,83 @@ import type { RemoteChecksum } from "../types";
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /**
- * Native Google Workspace MIME types that have no downloadable binary body.
+ * Native Google Workspace metadata definitions.
  * These files live entirely in the cloud; `files.get?alt=media` returns 403.
- * The map value is the URL-base used to open the file in the browser.
+ * They are saved locally as shortcut files (.gdoc, .gsheet, etc.) with a JSON
+ * payload containing the browser edit URL, doc_id, and resource_id so plugins
+ * like Obsidian GDocs can embed and render them.
  */
-export const GOOGLE_WORKSPACE_MIMES: ReadonlyMap<string, string> = new Map([
-	["application/vnd.google-apps.document", "https://docs.google.com/document/d/"],
-	["application/vnd.google-apps.spreadsheet", "https://docs.google.com/spreadsheets/d/"],
-	["application/vnd.google-apps.presentation", "https://docs.google.com/presentation/d/"],
-	["application/vnd.google-apps.drawing", "https://docs.google.com/drawings/d/"],
-	["application/vnd.google-apps.form", "https://docs.google.com/forms/d/"],
-	["application/vnd.google-apps.site", "https://sites.google.com/d/"],
-	["application/vnd.google-apps.jam", "https://jamboard.google.com/d/"],
+export interface GoogleWorkspaceMeta {
+	readonly extension: string;
+	readonly baseUrl: string;
+	readonly urlSuffix: string;
+	readonly resourceType: string;
+}
+
+export const GOOGLE_WORKSPACE_TYPES: ReadonlyMap<string, GoogleWorkspaceMeta> = new Map([
+	["application/vnd.google-apps.document", {
+		extension: "gdoc",
+		baseUrl: "https://docs.google.com/document/d/",
+		urlSuffix: "/edit",
+		resourceType: "document",
+	}],
+	["application/vnd.google-apps.spreadsheet", {
+		extension: "gsheet",
+		baseUrl: "https://docs.google.com/spreadsheets/d/",
+		urlSuffix: "/edit",
+		resourceType: "spreadsheet",
+	}],
+	["application/vnd.google-apps.presentation", {
+		extension: "gslides",
+		baseUrl: "https://docs.google.com/presentation/d/",
+		urlSuffix: "/edit",
+		resourceType: "presentation",
+	}],
+	["application/vnd.google-apps.drawing", {
+		extension: "gdraw",
+		baseUrl: "https://docs.google.com/drawings/d/",
+		urlSuffix: "/edit",
+		resourceType: "drawing",
+	}],
+	["application/vnd.google-apps.form", {
+		extension: "gform",
+		baseUrl: "https://docs.google.com/forms/d/",
+		urlSuffix: "/edit",
+		resourceType: "form",
+	}],
+	["application/vnd.google-apps.site", {
+		extension: "gsite",
+		baseUrl: "https://sites.google.com/d/",
+		urlSuffix: "/edit",
+		resourceType: "site",
+	}],
+	["application/vnd.google-apps.jam", {
+		extension: "gjam",
+		baseUrl: "https://jamboard.google.com/d/",
+		urlSuffix: "",
+		resourceType: "jam",
+	}],
+	["application/vnd.google-apps.script", {
+		extension: "gscript",
+		baseUrl: "https://script.google.com/home/projects/",
+		urlSuffix: "/edit",
+		resourceType: "script",
+	}],
 ]);
+
+/** Backward-compatible map for MIME to base URL */
+export const GOOGLE_WORKSPACE_MIMES: ReadonlyMap<string, string> = new Map(
+	Array.from(GOOGLE_WORKSPACE_TYPES.entries()).map(([mime, meta]) => [mime, meta.baseUrl])
+);
 
 /** Returns true when the file is a cloud-native Google Workspace document (not a folder). */
 export function isGoogleWorkspaceFile(file: GoogleDriveFile): boolean {
-	return GOOGLE_WORKSPACE_MIMES.has(file.mimeType);
+	return GOOGLE_WORKSPACE_TYPES.has(file.mimeType);
+}
+
+/** Returns the local shortcut file extension (e.g. "gdoc", "gsheet") or null for non-workspace files. */
+export function googleWorkspaceExtension(file: GoogleDriveFile): string | null {
+	return GOOGLE_WORKSPACE_TYPES.get(file.mimeType)?.extension ?? null;
 }
 
 /**
@@ -28,26 +88,33 @@ export function isGoogleWorkspaceFile(file: GoogleDriveFile): boolean {
  * Returns `null` for non-workspace files.
  */
 export function googleWorkspaceUrl(file: GoogleDriveFile): string | null {
-	const base = GOOGLE_WORKSPACE_MIMES.get(file.mimeType);
-	if (!base) return null;
-	return `${base}${file.id}/edit`;
+	const meta = GOOGLE_WORKSPACE_TYPES.get(file.mimeType);
+	if (!meta) return null;
+	return `${meta.baseUrl}${file.id}${meta.urlSuffix}`;
 }
 
 /**
- * Generate the content of a `.url` Internet Shortcut stub file for a Google
- * Workspace file. Returns the content as a UTF-8 encoded ArrayBuffer so it can
- * be returned from `read()` / written by the sync engine as-is.
+ * Generate the content of a Google Drive shortcut file (.gdoc, .gsheet, etc.)
+ * for a Google Workspace file. The content is formatted as standard JSON
+ * containing `url`, `doc_id`, and `resource_id`, which is recognized by Google Drive
+ * desktop and parsed by the Obsidian GDocs plugin to embed the document.
  */
 export function buildWorkspaceStubContent(file: GoogleDriveFile): ArrayBuffer {
-	const url = googleWorkspaceUrl(file);
-	if (!url) throw new Error(`Not a Google Workspace file: ${file.mimeType}`);
-	const text = `[InternetShortcut]\r\nURL=${url}\r\n`;
+	const meta = GOOGLE_WORKSPACE_TYPES.get(file.mimeType);
+	if (!meta) throw new Error(`Not a Google Workspace file: ${file.mimeType}`);
+	const url = `${meta.baseUrl}${file.id}${meta.urlSuffix}`;
+	const payload = {
+		url,
+		doc_id: file.id,
+		resource_id: `${meta.resourceType}:${file.id}`,
+	};
+	const text = JSON.stringify(payload, null, "\t") + "\n";
 	return new TextEncoder().encode(text).buffer.slice(0);
 }
 
 /**
  * Derive a synthetic remote checksum for a Google Workspace file stub.
- * Content changes don't alter the stub (it's just a URL), but the file's
+ * Content changes don't alter the stub (it's just a pointer), but the file's
  * identity (id + mimeType) determines whether the stub needs to be created
  * or updated. Using `opaque` algo since this isn't reproducible from local
  * file content.

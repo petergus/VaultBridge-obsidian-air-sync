@@ -2,10 +2,11 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi } from "vitest";
 import {
 	isGoogleWorkspaceFile,
+	googleWorkspaceExtension,
 	googleWorkspaceUrl,
 	buildWorkspaceStubContent,
 	workspaceStubChecksum,
-	GOOGLE_WORKSPACE_MIMES,
+	GOOGLE_WORKSPACE_TYPES,
 	FOLDER_MIME,
 } from "./types";
 import { GoogleDriveMetadataCache } from "./metadata-cache";
@@ -48,7 +49,7 @@ describe("Google Workspace types & helpers", () => {
 
 	describe("isGoogleWorkspaceFile", () => {
 		it("returns true for all supported Workspace MIME types", () => {
-			for (const mimeType of GOOGLE_WORKSPACE_MIMES.keys()) {
+			for (const mimeType of GOOGLE_WORKSPACE_TYPES.keys()) {
 				expect(isGoogleWorkspaceFile({ id: "x", name: "x", mimeType })).toBe(true);
 			}
 		});
@@ -60,6 +61,24 @@ describe("Google Workspace types & helpers", () => {
 		it("returns false for binary/regular files", () => {
 			expect(isGoogleWorkspaceFile(binaryFile)).toBe(false);
 			expect(isGoogleWorkspaceFile({ id: "x", name: "x.md", mimeType: "text/markdown" })).toBe(false);
+		});
+	});
+
+	describe("googleWorkspaceExtension", () => {
+		it("returns expected shortcut extension for each Workspace MIME type", () => {
+			expect(googleWorkspaceExtension(docFile)).toBe("gdoc");
+			expect(googleWorkspaceExtension(sheetFile)).toBe("gsheet");
+			expect(googleWorkspaceExtension(slideFile)).toBe("gslides");
+			expect(googleWorkspaceExtension({ id: "x", name: "x", mimeType: "application/vnd.google-apps.drawing" })).toBe("gdraw");
+			expect(googleWorkspaceExtension({ id: "x", name: "x", mimeType: "application/vnd.google-apps.form" })).toBe("gform");
+			expect(googleWorkspaceExtension({ id: "x", name: "x", mimeType: "application/vnd.google-apps.jam" })).toBe("gjam");
+			expect(googleWorkspaceExtension({ id: "x", name: "x", mimeType: "application/vnd.google-apps.script" })).toBe("gscript");
+			expect(googleWorkspaceExtension({ id: "x", name: "x", mimeType: "application/vnd.google-apps.site" })).toBe("gsite");
+		});
+
+		it("returns null for non-workspace files", () => {
+			expect(googleWorkspaceExtension(folderFile)).toBeNull();
+			expect(googleWorkspaceExtension(binaryFile)).toBeNull();
 		});
 	});
 
@@ -89,12 +108,27 @@ describe("Google Workspace types & helpers", () => {
 	});
 
 	describe("buildWorkspaceStubContent", () => {
-		it("returns UTF-8 encoded Windows .url Internet Shortcut content", () => {
+		it("returns UTF-8 encoded JSON shortcut content compatible with Obsidian GDocs plugin", () => {
 			const buf = buildWorkspaceStubContent(docFile);
 			const text = new TextDecoder().decode(buf);
-			expect(text).toBe(
-				"[InternetShortcut]\r\nURL=https://docs.google.com/document/d/doc-123/edit\r\n"
-			);
+			const parsed = JSON.parse(text);
+
+			expect(parsed).toEqual({
+				url: "https://docs.google.com/document/d/doc-123/edit",
+				doc_id: "doc-123",
+				resource_id: "document:doc-123",
+			});
+		});
+
+		it("returns correct JSON shortcut content for Google Sheets", () => {
+			const buf = buildWorkspaceStubContent(sheetFile);
+			const parsed = JSON.parse(new TextDecoder().decode(buf));
+
+			expect(parsed).toEqual({
+				url: "https://docs.google.com/spreadsheets/d/sheet-456/edit",
+				doc_id: "sheet-456",
+				resource_id: "spreadsheet:sheet-456",
+			});
 		});
 
 		it("throws an error for non-workspace files", () => {
@@ -116,7 +150,7 @@ describe("Google Workspace types & helpers", () => {
 });
 
 describe("GoogleDriveMetadataCache workspace handling", () => {
-	it("appends .url extension to workspace files during buildFromFiles", () => {
+	it("appends native extensions (.gdoc, .gsheet) to workspace files during buildFromFiles", () => {
 		const cache = new GoogleDriveMetadataCache("root");
 		cache.buildFromFiles([
 			{ id: "root", name: "Root", mimeType: FOLDER_MIME },
@@ -134,6 +168,13 @@ describe("GoogleDriveMetadataCache workspace handling", () => {
 				modifiedTime: "2026-03-01T12:00:00.000Z",
 			},
 			{
+				id: "sheet1",
+				name: "Finances.gsheet",
+				mimeType: "application/vnd.google-apps.spreadsheet",
+				parents: ["folder1"],
+				modifiedTime: "2026-03-01T12:00:00.000Z",
+			},
+			{
 				id: "file1",
 				name: "notes.md",
 				mimeType: "text/markdown",
@@ -144,8 +185,10 @@ describe("GoogleDriveMetadataCache workspace handling", () => {
 			},
 		]);
 
-		// Path should include .url extension for workspace file
-		expect(cache.getPathById("doc1")).toBe("Work/Project Brief.url");
+		// Path should include .gdoc extension for workspace file
+		expect(cache.getPathById("doc1")).toBe("Work/Project Brief.gdoc");
+		// Should not duplicate extension if already present
+		expect(cache.getPathById("sheet1")).toBe("Work/Finances.gsheet");
 		// Regular file retains original extension
 		expect(cache.getPathById("file1")).toBe("Work/notes.md");
 	});
@@ -164,10 +207,10 @@ describe("GoogleDriveMetadataCache workspace handling", () => {
 			doc,
 		]);
 
-		const entity = cache.toEntity("Project Brief.url", doc);
+		const entity = cache.toEntity("Project Brief.gdoc", doc);
 		const expectedStub = buildWorkspaceStubContent(doc);
 
-		expect(entity.path).toBe("Project Brief.url");
+		expect(entity.path).toBe("Project Brief.gdoc");
 		expect(entity.isDirectory).toBe(false);
 		expect(entity.size).toBe(expectedStub.byteLength);
 		expect(entity.mtime).toBe(new Date("2026-03-01T12:00:00.000Z").getTime());
@@ -182,8 +225,8 @@ describe("GoogleDriveMetadataCache workspace handling", () => {
 	});
 });
 
-describe("GoogleDriveFs.read workspace handling", () => {
-	it("returns synthesized .url content for workspace files without calling downloadFile", async () => {
+describe("GoogleDriveFs workspace operations", () => {
+	it("returns synthesized .gsheet JSON content for workspace files without calling downloadFile", async () => {
 		const { GoogleDriveFs } = await import("./index");
 
 		const mockClient = {
@@ -211,12 +254,14 @@ describe("GoogleDriveFs.read workspace handling", () => {
 		const fs = new GoogleDriveFs(mockClient, "root");
 		await fs.list(); // initialize cache
 
-		const content = await fs.read("Q1 Results.url");
-		const text = new TextDecoder().decode(content);
+		const content = await fs.read("Q1 Results.gsheet");
+		const parsed = JSON.parse(new TextDecoder().decode(content));
 
-		expect(text).toBe(
-			"[InternetShortcut]\r\nURL=https://docs.google.com/spreadsheets/d/sheet1/edit\r\n"
-		);
+		expect(parsed).toEqual({
+			url: "https://docs.google.com/spreadsheets/d/sheet1/edit",
+			doc_id: "sheet1",
+			resource_id: "spreadsheet:sheet1",
+		});
 		// Crucially, downloadFile must NOT have been called
 		expect((mockClient as { downloadFile: ReturnType<typeof vi.fn> }).downloadFile).not.toHaveBeenCalled();
 	});
@@ -248,4 +293,104 @@ describe("GoogleDriveFs.read workspace handling", () => {
 		expect(new TextDecoder().decode(content)).toBe("Hello World");
 		expect((mockClient as { downloadFile: ReturnType<typeof vi.fn> }).downloadFile).toHaveBeenCalledWith("file1");
 	});
+
+	it("strips workspace extension (.gdoc) on rename before updating remote Google Drive metadata", async () => {
+		const { GoogleDriveFs } = await import("./index");
+
+		const updateFileMetadata = vi.fn().mockResolvedValue({
+			id: "doc1",
+			name: "New Strategy",
+			mimeType: "application/vnd.google-apps.document",
+			parents: ["root"],
+		});
+
+		const mockClient = {
+			listAllFiles: vi.fn().mockResolvedValue([
+				{ id: "root", name: "root", mimeType: FOLDER_MIME },
+				{
+					id: "doc1",
+					name: "Old Strategy",
+					mimeType: "application/vnd.google-apps.document",
+					parents: ["root"],
+				},
+			]),
+			getChangesStartToken: vi.fn().mockResolvedValue("token1"),
+			updateFileMetadata,
+		} as never;
+
+		const fs = new GoogleDriveFs(mockClient, "root");
+		await fs.list();
+
+		await fs.rename("Old Strategy.gdoc", "New Strategy.gdoc");
+
+		expect(updateFileMetadata).toHaveBeenCalledWith(
+			"doc1",
+			{ name: "New Strategy" },
+			undefined,
+			undefined
+		);
+	});
+
+	it("refuses to overwrite existing workspace document via write()", async () => {
+		const { GoogleDriveFs } = await import("./index");
+
+		const mockClient = {
+			listAllFiles: vi.fn().mockResolvedValue([
+				{ id: "root", name: "root", mimeType: FOLDER_MIME },
+				{
+					id: "doc1",
+					name: "Document",
+					mimeType: "application/vnd.google-apps.document",
+					parents: ["root"],
+				},
+			]),
+			getChangesStartToken: vi.fn().mockResolvedValue("token1"),
+		} as never;
+
+		const fs = new GoogleDriveFs(mockClient, "root");
+		await fs.list();
+
+		await expect(
+			fs.write("Document.gdoc", new ArrayBuffer(10), Date.now())
+		).rejects.toThrow("Cannot write directly to Google Workspace document");
+	});
+
+	it("skips remote deletion for workspace documents to protect cloud docs", async () => {
+		const { GoogleDriveFs } = await import("./index");
+
+		const deleteFile = vi.fn();
+		const mockClient = {
+			listAllFiles: vi.fn().mockResolvedValue([
+				{ id: "root", name: "root", mimeType: FOLDER_MIME },
+				{
+					id: "doc1",
+					name: "Critical Notes",
+					mimeType: "application/vnd.google-apps.document",
+					parents: ["root"],
+				},
+				{
+					id: "file1",
+					name: "temp.txt",
+					mimeType: "text/plain",
+					size: "10",
+					parents: ["root"],
+					md5Checksum: "123",
+				},
+			]),
+			getChangesStartToken: vi.fn().mockResolvedValue("token1"),
+			deleteFile,
+		} as never;
+
+		const fs = new GoogleDriveFs(mockClient, "root");
+		await fs.list();
+
+		// Deleting a workspace document should be a no-op on Google Drive
+		await fs.delete("Critical Notes.gdoc");
+		expect(deleteFile).not.toHaveBeenCalled();
+
+		// Deleting a regular file should call deleteFile
+		await fs.delete("temp.txt");
+		expect(deleteFile).toHaveBeenCalledWith("file1");
+	});
 });
+

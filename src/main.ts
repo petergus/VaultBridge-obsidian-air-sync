@@ -15,6 +15,7 @@ import { Logger, getDeviceName } from "./logging/logger";
 import { ConflictHistory } from "./sync/conflict-history";
 import { ConflictTracker } from "./sync/conflict-tracker";
 import { handleOAuthProtocolCallback } from "./fs/oauth-callback-error";
+import { registerContextMenuHandlers } from "./ui/context-menu";
 
 export default class VaultBridgePlugin extends Plugin {
 	settings!: VaultBridgeSettings;
@@ -197,6 +198,36 @@ export default class VaultBridgePlugin extends Plugin {
 				void this.rescan();
 			},
 		});
+		this.addCommand({
+			id: "open-active-file-in-remote",
+			name: "Open active file in Google Drive",
+			callback: async () => {
+				const activeFile = this.app.workspace.getActiveFile();
+				if (!activeFile) {
+					new Notice("No active file to open");
+					return;
+				}
+				const provider = this.backendManager.getBackendProvider();
+				const remoteFs = this.backendManager.getRemoteFs();
+				if (!provider || !remoteFs?.getWebUrl) {
+					new Notice("Remote storage is not connected");
+					return;
+				}
+				const displayName = provider.displayName.toLowerCase().includes("google drive")
+					? "Google Drive"
+					: provider.displayName;
+				try {
+					const url = await remoteFs.getWebUrl(activeFile.path);
+					if (url) {
+						window.open(url);
+					} else {
+						new Notice(`"${activeFile.name}" is not yet synced to ${displayName}`);
+					}
+				} catch {
+					new Notice(`Failed to open "${activeFile.name}" in ${displayName}`);
+				}
+			},
+		});
 
 		// Status bar: a clickable cloud icon triggers a manual sync, with the
 		// sync status shown as text beside it.
@@ -222,6 +253,15 @@ export default class VaultBridgePlugin extends Plugin {
 				}
 			})
 		);
+
+		// Register right-click context menu handlers (Open in Google Drive / cloud provider)
+		registerContextMenuHandlers({
+			app: this.app,
+			backendManager: this.backendManager,
+			registerEvent: (ref) => this.registerEvent(ref),
+			registerDomEvent: (el, type, cb, options) => this.registerDomEvent(el as any, type as any, cb, options),
+			registerCleanup: (cb) => this.register(cb),
+		});
 
 		// Run one sync once the vault index is loaded. The scheduler defers its
 		// event wiring until then, and runSync() is gated on layoutReady, so this

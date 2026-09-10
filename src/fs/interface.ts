@@ -98,6 +98,13 @@ export interface IFileSystem {
 	checkpoint?: IncrementalCheckpoint;
 
 	/**
+	 * Return a web URL to open this file or directory in the remote provider's web UI,
+	 * or null if unsupported or if the path has not been synced to the remote yet.
+	 * Empty path ("" or "/") represents the vault root directory.
+	 */
+	getWebUrl?(path: string): Promise<string | null>;
+
+	/**
 	 * Release resources (e.g. close IndexedDB connections).
 	 * Called on plugin unload. Optional — not all backends need cleanup.
 	 */

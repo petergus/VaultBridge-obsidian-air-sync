@@ -1,5 +1,13 @@
 import type { FileEntity } from "../types";
-import { FOLDER_MIME, toRemoteChecksum, isGoogleWorkspaceFile, buildWorkspaceStubContent } from "./types";
+import {
+	FOLDER_MIME,
+	toRemoteChecksum,
+	isGoogleWorkspaceFile,
+	googleWorkspaceExtension,
+	googleWorkspaceUrl,
+	GOOGLE_WORKSPACE_TYPES,
+	buildWorkspaceStubContent,
+} from "./types";
 import type { GoogleDriveFile } from "./types";
 import type { GoogleDriveClient } from "./client";
 import type { MetadataStore } from "../../store/metadata-store";
@@ -64,16 +72,25 @@ export class GoogleDriveFs extends CachingRemoteFs<GoogleDriveFile> {
 	}
 
 	protected deleteRemote(fileId: string): Promise<void> {
+		const path = this.cache.getPathById(fileId);
+		const cached = path ? this.cache.getFile(path) : undefined;
+		if (cached && isGoogleWorkspaceFile(cached)) {
+			this.logger?.info("Skipping remote deletion for Google Workspace document", {
+				fileId,
+				name: cached.name,
+			});
+			return Promise.resolve();
+		}
 		return this.client.deleteFile(fileId);
 	}
 
 	// ── Read override for Google Workspace files ──
 
 	/**
-	 * Download file content — or synthesize a `.url` stub for Google Workspace
-	 * files (Docs/Sheets/Slides/…). These files have no downloadable binary
-	 * body (`files.get?alt=media` returns 403), so we generate an Internet
-	 * Shortcut containing the browser-open URL instead.
+	 * Download file content — or synthesize a shortcut stub (.gdoc, .gsheet, …)
+	 * for Google Workspace files (Docs/Sheets/Slides/…). These files have no
+	 * downloadable binary body (`files.get?alt=media` returns 403), so we generate
+	 * a JSON shortcut file compatible with Obsidian's GDocs plugin instead.
 	 *
 	 * For normal files, delegates to the base class which splits mutex + download.
 	 */
@@ -115,6 +132,11 @@ export class GoogleDriveFs extends CachingRemoteFs<GoogleDriveFile> {
 					);
 				}
 				const existingFile = this.cache.getFile(path);
+				if (existingFile && isGoogleWorkspaceFile(existingFile)) {
+					throw new Error(
+						`Cannot write directly to Google Workspace document: "${path}". Edit via Google Docs in browser or embedded view.`
+					);
+				}
 				const existingId = existingFile?.id;
 				const fileName = path.split("/").pop()!;
 				const parentPath = path.substring(0, path.lastIndexOf("/"));
@@ -179,7 +201,17 @@ export class GoogleDriveFs extends CachingRemoteFs<GoogleDriveFile> {
 				const newParentPath = newPath.substring(0, newPath.lastIndexOf("/"));
 
 				const metadata: { name?: string } = {};
-				if (oldName !== newName) metadata.name = newName;
+				if (oldName !== newName) {
+					// If this is a Google Workspace file, strip the local shortcut extension
+					// so Google Drive doesn't display "Doc.gdoc" on the web interface.
+					const ext = googleWorkspaceExtension(googleDriveFile);
+					const strippedNewName = ext && newName.toLowerCase().endsWith(`.${ext}`)
+						? newName.slice(0, -(ext.length + 1))
+						: newName;
+					if (googleDriveFile.name !== strippedNewName) {
+						metadata.name = strippedNewName;
+					}
+				}
 
 				let addParents: string | undefined;
 				let removeParents: string | undefined;
@@ -270,5 +302,41 @@ export class GoogleDriveFs extends CachingRemoteFs<GoogleDriveFile> {
 		}
 
 		return parentId;
+	}
+
+	/**
+	 * Return a web URL to open this file or folder in Google Drive or Google Docs.
+	 * Returns null if the item has not yet been synced to Google Drive.
+	 */
+	async getWebUrl(path: string): Promise<string | null> {
+		path = normalizeSyncPath(path);
+		if (!path) {
+			return `https://drive.google.com/drive/folders/${this.rootFolderId}`;
+		}
+
+		return this.cacheMutex.run(async () => {
+			await this.ensureInitialized();
+			let file = this.cache.getFile(path);
+			if (!file) {
+				// Check Google Workspace shortcut extensions (.gdoc, .gsheet, etc.)
+				for (const meta of GOOGLE_WORKSPACE_TYPES.values()) {
+					const candidate = `${path}.${meta.extension}`;
+					const found = this.cache.getFile(candidate);
+					if (found) {
+						file = found;
+						break;
+					}
+				}
+			}
+			if (!file) return null;
+
+			if (isGoogleWorkspaceFile(file)) {
+				return googleWorkspaceUrl(file);
+			}
+			if (this.cache.isFolder(path) || file.mimeType === FOLDER_MIME) {
+				return `https://drive.google.com/drive/folders/${file.id}`;
+			}
+			return `https://drive.google.com/file/d/${file.id}/view`;
+		});
 	}
 }
