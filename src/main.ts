@@ -83,7 +83,8 @@ export default class VaultBridgePlugin extends Plugin {
 				new Notice(message);
 			},
 			refreshSettingsDisplay: () => {
-				this.settingTab?.display();
+				// Re-render the settings tab in place via renderContent directly
+				this.settingTab?.renderContent();
 			},
 		});
 

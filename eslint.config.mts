@@ -122,6 +122,12 @@ export default tseslint.config(
 			globals: {
 				...globals.browser,
 				process: "readonly",
+				// Obsidian augments the global scope with DOM helpers (obsidian.d.ts `declare global`).
+				createEl: "readonly",
+				createDiv: "readonly",
+				createSpan: "readonly",
+				createSvg: "readonly",
+				createFragment: "readonly",
 			},
 			parserOptions: {
 				projectService: {
