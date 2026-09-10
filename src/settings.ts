@@ -13,6 +13,18 @@ export interface VaultBridgeSettings {
 	enableThreeWayMerge: boolean;
 	/** Dot-prefixed paths to include in sync (e.g. [".templates", ".stversions"]) */
 	syncDotPaths: string[];
+	/** Enable sync of Obsidian's own config directory (.obsidian/) */
+	enableConfigSync: boolean;
+	/** Include root JSON files under the Obsidian config directory */
+	syncConfigJsonFiles: boolean;
+	/** Include installed plugin files under the Obsidian config directory */
+	syncConfigPlugins: boolean;
+	/** Include CSS snippets under the Obsidian config directory */
+	syncConfigSnippets: boolean;
+	/** Include installed themes under the Obsidian config directory */
+	syncConfigThemes: boolean;
+	/** Include custom icons under the Obsidian config directory */
+	syncConfigIcons: boolean;
 	/** Maximum file size in MB to sync on mobile */
 	mobileMaxFileSizeMB: number;
 	/**
@@ -94,6 +106,12 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
 	conflictStrategy: "auto_merge",
 	ignorePatterns: [...DEFAULT_IGNORE_PATTERNS],
 	syncDotPaths: [],
+	enableConfigSync: false,
+	syncConfigJsonFiles: true,
+	syncConfigPlugins: true,
+	syncConfigSnippets: false,
+	syncConfigThemes: false,
+	syncConfigIcons: false,
 	enableThreeWayMerge: true,
 	mobileMaxFileSizeMB: 10,
 	maxDeletionsPerSync: 20,

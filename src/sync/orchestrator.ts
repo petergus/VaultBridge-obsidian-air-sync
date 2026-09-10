@@ -5,6 +5,8 @@ import type { Logger } from "../logging/logger";
 import { AsyncMutex } from "../queue/async-queue";
 import { isIgnored, isSystemJunkFile } from "../utils/ignore";
 import { isDotPathOutOfScope } from "../utils/path";
+import { getEffectiveIgnorePatterns, getEffectiveSyncDotPaths, isOwnPluginDataPath } from "../config-sync";
+import { computeScopeFingerprint } from "./scope-fingerprint";
 import { INTERNAL_METADATA_PATH } from "../fs/remote-vault-contract";
 import { SyncStateStore } from "./state";
 import { LocalChangeTracker, type TrackerSnapshot } from "./local-tracker";
@@ -166,6 +168,10 @@ export type { SyncStatus };
 export interface SyncOrchestratorDeps {
 	getSettings: () => VaultBridgeSettings;
 	saveSettings: () => Promise<void>;
+	/** The vault's configured config directory (`Vault#configDir`), for config sync. */
+	configDir: () => string;
+	/** This plugin's manifest id (`Plugin#manifest.id`), for config sync. */
+	pluginId: () => string;
 	localFs: () => IFileSystem | null;
 	remoteFs: () => IFileSystem | null;
 	backendProvider: () => IBackendProvider | null;
@@ -301,10 +307,11 @@ export class SyncOrchestrator {
 		if (path === INTERNAL_METADATA_PATH) return true;
 		// Exclude conflict tracker index
 		if (path === "sync-conflicts.md") return true;
-		// Exclude the plugin's own settings file: safety-critical config must not
+		const configDir = this.deps.configDir();
+		// This plugin's own settings file: safety-critical config must not
 		// round-trip through sync/merge. Multi-device settings sync, if wanted, must
 		// use a separate explicitly-synced file rather than the active config.
-		if (path === ".obsidian/plugins/vaultbridge/data.json") return true;
+		if (isOwnPluginDataPath(path, configDir, this.deps.pluginId())) return true;
 		// OS-generated junk (desktop.ini, thumbs.db, .DS_Store) is never synced on any
 		// backend — treated as non-existent like the reserved metadata path. Beyond
 		// being noise, some backends (Dropbox) reject these outright, which would
@@ -313,8 +320,8 @@ export class SyncOrchestrator {
 		// A path syncs only if it passes BOTH gates: the dot-path scope
 		// (hidden paths are in scope only when opted into syncDotPaths) AND
 		// the user's ignore patterns.
-		if (isDotPathOutOfScope(path, settings.syncDotPaths)) return true;
-		return isIgnored(path, settings.ignorePatterns);
+		if (isDotPathOutOfScope(path, getEffectiveSyncDotPaths(settings, configDir))) return true;
+		return isIgnored(path, getEffectiveIgnorePatterns(settings, configDir, this.deps.pluginId()));
 	}
 
 	/**
@@ -380,10 +387,18 @@ export class SyncOrchestrator {
 				const noCheckpoint = remoteFs.checkpoint
 					? !(await remoteFs.checkpoint.hasCheckpoint())
 					: false;
-				const forceFullScan = noCheckpoint || this.recoverViaColdScan;
-				this.deps.logger?.info("Sync started", { forceFullScan });
+				const scopeFingerprint = await computeScopeFingerprint(
+					this.deps.getSettings(),
+					this.deps.configDir(),
+					this.deps.pluginId(),
+				);
+				const scopeChanged = remoteFs.checkpoint?.getScopeFingerprint
+					? (await remoteFs.checkpoint.getScopeFingerprint()) !== scopeFingerprint
+					: false;
+				const forceFullScan = noCheckpoint || this.recoverViaColdScan || scopeChanged;
+				this.deps.logger?.info("Sync started", { forceFullScan, scopeChanged });
 
-				const result = await this.executeWithRetry(forceFullScan, snapshot);
+				const result = await this.executeWithRetry(forceFullScan, snapshot, scopeFingerprint);
 				if (!result) return; // Fatal error already handled
 
 				const { succeeded, failed, blocked, conflicts } = result;
@@ -433,13 +448,17 @@ export class SyncOrchestrator {
 	/**
 	 * Execute sync with retry logic. Returns null on fatal error (already reported).
 	 */
-	private async executeWithRetry(forceFullScan: boolean, snapshot: TrackerSnapshot): Promise<SyncCycleResult | null> {
+	private async executeWithRetry(
+		forceFullScan: boolean,
+		snapshot: TrackerSnapshot,
+		scopeFingerprint: string,
+	): Promise<SyncCycleResult | null> {
 		let lastError: unknown = null;
 		let lastResult: ExecutionResult | null = null;
 
 		for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 			try {
-				lastResult = await this.executeSyncOnce(forceFullScan, snapshot);
+				lastResult = await this.executeSyncOnce(forceFullScan, snapshot, scopeFingerprint);
 				return {
 					result: lastResult,
 					succeeded: lastResult.succeeded.length,
@@ -555,7 +574,11 @@ export class SyncOrchestrator {
 		return this.syncMutex.isLocked ? "syncing" : "idle";
 	}
 
-	private async executeSyncOnce(forceFullScan: boolean, snapshot: TrackerSnapshot) {
+	private async executeSyncOnce(
+		forceFullScan: boolean,
+		snapshot: TrackerSnapshot,
+		scopeFingerprint: string,
+	) {
 		const localFs = this.deps.localFs();
 		const remoteFs = this.deps.remoteFs();
 		if (!localFs || !remoteFs) {
@@ -717,7 +740,7 @@ export class SyncOrchestrator {
 		// The checkpoint lives on the FS now (no provider downcast): flush it only on a
 		// fully clean cycle so a partial sync keeps the prior committed cursor.
 		if (cleanCycle && remoteFs?.checkpoint) {
-			await remoteFs.checkpoint.commitCheckpoint();
+			await remoteFs.checkpoint.commitCheckpoint({ scopeFingerprint });
 		}
 		// readBackendState now persists only non-secret token state (the cursor lives
 		// in the backend store, committed above) — safe to run every cycle.

@@ -348,6 +348,12 @@ export function mockSettings(
 		conflictStrategy: "auto_merge",
 		ignorePatterns: [],
 		syncDotPaths: [],
+		enableConfigSync: false,
+		syncConfigJsonFiles: true,
+		syncConfigPlugins: true,
+		syncConfigSnippets: false,
+		syncConfigThemes: false,
+		syncConfigIcons: false,
 		// Mirror production DEFAULT_SETTINGS for behaviour-affecting flags so tests
 		// don't run under a configuration real users never have.
 		enableThreeWayMerge: true,

@@ -102,6 +102,8 @@ export default class VaultBridgePlugin extends Plugin {
 		this.orchestrator = new SyncOrchestrator({
 			getSettings: () => this.settings,
 			saveSettings: () => this.saveSettings(),
+			configDir: () => this.app.vault.configDir,
+			pluginId: () => this.manifest.id,
 			localFs: () => this.localFs,
 			remoteFs: () => this.backendManager.getRemoteFs(),
 			backendProvider: () => this.backendManager.getBackendProvider(),

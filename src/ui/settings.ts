@@ -4,6 +4,7 @@ import type { ConflictStrategy } from "../sync/types";
 import { getAllBackendProviders, getBackendProvider } from "../fs/registry";
 import { getBackendSettingsRenderer } from "./backend-settings";
 import { parseLines } from "../utils/parse-lines";
+import { renderConfigSyncSettings } from "./config-sync-settings";
 
 export class VaultBridgeSettingTab extends PluginSettingTab {
 	plugin: VaultBridgePlugin;
@@ -342,5 +343,9 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// --- Config directory sync ---
+		new Setting(containerEl).setName("Obsidian config sync").setHeading();
+		renderConfigSyncSettings(containerEl, this.plugin, () => this.renderContent());
 	}
 }

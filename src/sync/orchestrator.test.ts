@@ -22,6 +22,9 @@ vi.mock("./error", async (importOriginal) => {
 	return { ...actual, sleep: () => Promise.resolve() };
 });
 
+const TEST_CONFIG_DIR = ".cfg";
+const TEST_PLUGIN_ID = "test-plugin";
+
 function mockSettings(): VaultBridgeSettings {
 	// Unique vaultId per call keeps each orchestrator's fake-indexeddb store isolated.
 	return baseMockSettings({
@@ -38,6 +41,8 @@ function createDeps(
 	return {
 		getSettings: () => mockSettings(),
 		saveSettings: vi.fn().mockResolvedValue(undefined),
+		configDir: () => TEST_CONFIG_DIR,
+		pluginId: () => TEST_PLUGIN_ID,
 		localFs: () => localFs,
 		remoteFs: () => remoteFs,
 		backendProvider: () => null,
@@ -763,6 +768,55 @@ describe("SyncOrchestrator", () => {
 			expect(orchestrator.isExcluded("notes/.DS_Store")).toBe(true);
 			// Real content is unaffected.
 			expect(orchestrator.isExcluded("notes/hello.md")).toBe(false);
+		});
+
+		it("does not sync the config directory by default (enableConfigSync off)", () => {
+			const settings = mockSettings();
+			settings.enableConfigSync = false;
+			settings.syncDotPaths = [];
+			settings.ignorePatterns = [];
+			const deps = createDeps({ getSettings: () => settings });
+			const orchestrator = new SyncOrchestrator(deps);
+
+			expect(orchestrator.isExcluded(`${TEST_CONFIG_DIR}/app.json`)).toBe(true);
+		});
+
+		it("syncs allowed config-dir paths and excludes this plugin's own data.json when enableConfigSync is on", () => {
+			const settings = mockSettings();
+			settings.enableConfigSync = true;
+			settings.syncDotPaths = [];
+			settings.ignorePatterns = [];
+			const deps = createDeps({ getSettings: () => settings });
+			const orchestrator = new SyncOrchestrator(deps);
+
+			// Portable settings sync...
+			expect(orchestrator.isExcluded(`${TEST_CONFIG_DIR}/app.json`)).toBe(false);
+			expect(orchestrator.isExcluded(`${TEST_CONFIG_DIR}/plugins/some-other-plugin/data.json`)).toBe(false);
+			// ...but device-specific layout and this plugin's own data.json don't.
+			expect(orchestrator.isExcluded(`${TEST_CONFIG_DIR}/workspace.json`)).toBe(true);
+			expect(orchestrator.isExcluded(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/data.json`)).toBe(true);
+		});
+
+		it("never syncs this plugin's own data.json, even if the user's own ignorePatterns tries to un-ignore it", () => {
+			const settings = mockSettings();
+			settings.enableConfigSync = true;
+			settings.syncDotPaths = [];
+			settings.ignorePatterns = ["!**"];
+			const deps = createDeps({ getSettings: () => settings });
+			const orchestrator = new SyncOrchestrator(deps);
+
+			expect(orchestrator.isExcluded(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/data.json`)).toBe(true);
+		});
+
+		it("never syncs this plugin's own data.json even with enableConfigSync off, if the user manually opted the config dir into syncDotPaths", () => {
+			const settings = mockSettings();
+			settings.enableConfigSync = false;
+			settings.syncDotPaths = [TEST_CONFIG_DIR];
+			settings.ignorePatterns = ["!**"];
+			const deps = createDeps({ getSettings: () => settings });
+			const orchestrator = new SyncOrchestrator(deps);
+
+			expect(orchestrator.isExcluded(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/data.json`)).toBe(true);
 		});
 	});
 
