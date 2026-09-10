@@ -6,6 +6,7 @@ import { assertGoogleDriveFile, buildUploadMetadata } from "./types";
 const UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
 const FILE_FIELDS = "id,name,mimeType,size,modifiedTime,parents,md5Checksum";
 export const RESUMABLE_THRESHOLD = 5 * 1024 * 1024; // 5MB
+const MISSING_RESUMABLE_LOCATION_CODE = "googledrive.resumable_upload.missing_location";
 
 /** Dependencies injected by GoogleDriveClient */
 export interface ResumableUploadDeps {
@@ -67,7 +68,14 @@ export class ResumableUploader {
 
 		const uploadUrl = initResponse.headers["location"];
 		if (!uploadUrl) {
-			throw new Error("Resumable upload: no upload URL in response");
+			const error = new Error("Resumable upload: no upload URL in response");
+			Object.assign(error, {
+				permanent: true,
+				permanentCode: MISSING_RESUMABLE_LOCATION_CODE,
+				status: initResponse.status,
+				headers: initResponse.headers,
+			});
+			throw error;
 		}
 
 		// Upload the entire content in a single PUT (see class doc for why not chunked).

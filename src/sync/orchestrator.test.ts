@@ -1030,6 +1030,95 @@ describe("SyncOrchestrator", () => {
 			await orchestrator.close();
 		});
 
+		it("does not keep cold-scanning and re-pushing the same poison file after repeated identical failures", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			addFile(localFs, "synced.md", "kept", 1000);
+			addFile(localFs, "poison.zip", "large file", 1000);
+			addFile(remoteFs, "synced.md", "kept", 1000);
+
+			const settings = baseMockSettings({
+				backendType: "test",
+				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
+			});
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
+
+			const deps = createDeps({
+				getSettings: () => settings,
+				localFs: () => localFs,
+				remoteFs: () => remoteFs,
+				backendProvider: () => mockProvider({}),
+			});
+			const orchestrator = new SyncOrchestrator(deps);
+			await orchestrator.state.put({
+				path: "synced.md",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 4,
+				remoteSize: 4,
+				syncedAt: 900,
+			});
+
+			const remoteListSpy = vi.spyOn(remoteFs, "list");
+			let attempts = 0;
+			const writeSpy = vi.spyOn(remoteFs, "write").mockImplementation(() => {
+				attempts++;
+				const headers = attempts === 1
+					? "X-Goog-Upload-Status, X-Request-Id"
+					: "X-Request-Id, X-Goog-Upload-Status";
+				return Promise.reject(Object.assign(
+					new Error(`Resumable upload: no upload URL in response (status 200; headers: ${headers})`),
+					{
+						permanent: true,
+						permanentCode: "googledrive.resumable_upload.missing_location",
+					},
+				));
+			});
+
+			await orchestrator.runSync();
+			await orchestrator.runSync();
+			await orchestrator.runSync();
+
+			expect(writeSpy).toHaveBeenCalledTimes(2);
+			expect(remoteListSpy).toHaveBeenCalledTimes(1);
+			expect(deps.onStatusChange).toHaveBeenCalledWith("partial_error");
+			expect(deps.notify).toHaveBeenLastCalledWith("Sync: 1 blocked");
+			await orchestrator.close();
+		});
+
+		it("does not quarantine uncoded permanent push failures", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			addFile(localFs, "uncoded.md", "body", 1000);
+
+			const settings = baseMockSettings({
+				backendType: "test",
+				vaultId: `test-${Math.random()}`,
+			});
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
+
+			const deps = createDeps({
+				getSettings: () => settings,
+				localFs: () => localFs,
+				remoteFs: () => remoteFs,
+				backendProvider: () => mockProvider({}),
+			});
+			const orchestrator = new SyncOrchestrator(deps);
+			const writeSpy = vi.spyOn(remoteFs, "write").mockRejectedValue(
+				Object.assign(new Error("uncoded permanent failure"), { permanent: true }),
+			);
+
+			await orchestrator.runSync();
+			await orchestrator.runSync();
+			await orchestrator.runSync();
+
+			expect(writeSpy).toHaveBeenCalledTimes(3);
+			expect(deps.onStatusChange).toHaveBeenCalledWith("partial_error");
+			await orchestrator.close();
+		});
+
 		/**
 		 * The cursor commits atomically with the file map INSIDE commitCheckpoint (one
 		 * IndexedDB transaction — ADR 0001). If that flush fails it must propagate so

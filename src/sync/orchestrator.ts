@@ -12,15 +12,154 @@ import { collectChanges } from "./change-detector";
 import { planSync } from "./decision-engine";
 import { refinePlan } from "./rename-optimizer";
 import { executePlan, toConflictRecords, DESKTOP_TRANSFER_POOL, MOBILE_TRANSFER_POOL } from "./plan-executor";
-import type { ExecutionContext, ExecutionResult } from "./plan-executor";
-import { classifyHttpError } from "../fs/errors";
+import type { ExecutionContext, ExecutionResult, FailedAction } from "./plan-executor";
+import { classifyHttpError, type ErrorClassification } from "../fs/errors";
 import { decideRetry, sleep } from "./error";
-import type { ConflictRecord, SyncStatus } from "./types";
+import type { ConflictRecord, SyncStatus, SyncAction, SyncActionType } from "./types";
 import { buildSyncRecord } from "./state-committer";
 import { CycleSummary } from "./sync-notification";
 import type { SyncCycleResult } from "./sync-notification";
 import { splitPlanAtLimit, enforceListingCompleteness, SuspiciousListingError, DeletionVelocityTracker } from "./deletion-guard";
-import type { SyncAction } from "./types";
+
+interface FailedActionEntry {
+	key: string;
+	actionFingerprint: string;
+	consecutiveFailures: number;
+	blockedUntil: number;
+}
+
+const FAILED_ACTION_BLOCK_THRESHOLD = 2;
+const FAILED_ACTION_BLOCK_TTL_MS = 5 * 60 * 1000;
+const BLOCKABLE_LOCAL_ORIGIN_ACTIONS = new Set<SyncActionType>(["push", "delete_remote", "rename_remote"]);
+
+class FailedActionTracker {
+	private readonly entries = new Map<string, FailedActionEntry>();
+
+	isBlocked(backendType: string, action: SyncAction, now = Date.now()): string | null {
+		if (!isBlockableLocalOriginAction(action)) return null;
+		this.expire(now);
+		const prefix = this.actionPrefix(backendType, action);
+		const fingerprint = actionFingerprint(action);
+		for (const entry of this.entries.values()) {
+			if (!entry.key.startsWith(prefix)) continue;
+			if (entry.actionFingerprint !== fingerprint) {
+				this.entries.delete(entry.key);
+				continue;
+			}
+			if (entry.blockedUntil > now) {
+				return `blocked after ${entry.consecutiveFailures} repeated failures; retry after ${new Date(entry.blockedUntil).toISOString()}`;
+			}
+		}
+		return null;
+	}
+
+	recordSuccess(backendType: string, action: SyncAction): void {
+		this.clearAction(backendType, action);
+	}
+
+	recordFailure(
+		backendType: string,
+		failed: FailedAction,
+		classification: ErrorClassification,
+		now = Date.now(),
+	): void {
+		if (!isBlockableLocalOriginAction(failed.action)) return;
+		this.expire(now);
+		const failureCode = quarantineFailureCode(classification);
+		if (!failureCode) {
+			this.clearAction(backendType, failed.action);
+			return;
+		}
+		const key = this.key(backendType, failed.action, failureCode);
+		const fingerprint = actionFingerprint(failed.action);
+		const existing = this.entries.get(key);
+		const consecutiveFailures = existing?.actionFingerprint === fingerprint
+			? existing.consecutiveFailures + 1
+			: 1;
+		this.clearAction(backendType, failed.action);
+		this.entries.set(key, {
+			key,
+			actionFingerprint: fingerprint,
+			consecutiveFailures,
+			blockedUntil: consecutiveFailures >= FAILED_ACTION_BLOCK_THRESHOLD
+				? now + FAILED_ACTION_BLOCK_TTL_MS
+				: 0,
+		});
+	}
+
+	isBlockingFailure(
+		backendType: string,
+		failed: FailedAction,
+		classification: ErrorClassification,
+		now = Date.now(),
+	): boolean {
+		if (!isBlockableLocalOriginAction(failed.action)) return false;
+		const failureCode = quarantineFailureCode(classification);
+		if (!failureCode) return false;
+		const entry = this.entries.get(this.key(backendType, failed.action, failureCode));
+		return !!entry && entry.actionFingerprint === actionFingerprint(failed.action) && entry.blockedUntil > now;
+	}
+
+	private expire(now: number): void {
+		for (const [key, entry] of this.entries) {
+			if (entry.blockedUntil > 0 && entry.blockedUntil <= now) this.entries.delete(key);
+		}
+	}
+
+	private actionPrefix(backendType: string, action: SyncAction): string {
+		return `${backendType}\u0000${action.action}\u0000${action.path}\u0000`;
+	}
+
+	private clearAction(backendType: string, action: SyncAction): void {
+		const prefix = this.actionPrefix(backendType, action);
+		for (const key of [...this.entries.keys()]) {
+			if (key.startsWith(prefix)) this.entries.delete(key);
+		}
+	}
+
+	private key(backendType: string, action: SyncAction, failureCode: string): string {
+		return `${this.actionPrefix(backendType, action)}permanent\u0000${failureCode}`;
+	}
+}
+
+function isBlockableLocalOriginAction(action: SyncAction): boolean {
+	return BLOCKABLE_LOCAL_ORIGIN_ACTIONS.has(action.action);
+}
+
+function quarantineFailureCode(classification: ErrorClassification): string | null {
+	return classification.kind === "permanent" && classification.permanentCode
+		? classification.permanentCode
+		: null;
+}
+
+function actionFingerprint(action: SyncAction): string {
+	return JSON.stringify({
+		action: action.action,
+		path: action.path,
+		oldPath: "oldPath" in action ? action.oldPath : undefined,
+		local: entityFingerprint(action.local),
+		remote: entityFingerprint(action.remote),
+		baseline: action.baseline
+			? {
+				hash: action.baseline.hash,
+				localMtime: action.baseline.localMtime,
+				remoteMtime: action.baseline.remoteMtime,
+				localSize: action.baseline.localSize,
+				remoteSize: action.baseline.remoteSize,
+			}
+			: undefined,
+	});
+}
+
+function entityFingerprint(entity: SyncAction["local"]): unknown {
+	if (!entity) return undefined;
+	return {
+		isDirectory: entity.isDirectory,
+		size: entity.size,
+		mtime: entity.mtime,
+		hash: entity.hash,
+	};
+}
 
 export type { SyncStatus };
 
@@ -65,6 +204,7 @@ export class SyncOrchestrator {
 	 * cycle cold — a full list × baseline join recovers it regardless of cursor.
 	 */
 	private recoverViaColdScan = false;
+	private failedActionTracker = new FailedActionTracker();
 	/** Stable id grouping this plugin session's conflict-history records. */
 	private readonly sessionId = crypto.randomUUID();
 	private deps: SyncOrchestratorDeps;
@@ -246,16 +386,15 @@ export class SyncOrchestrator {
 				const result = await this.executeWithRetry(forceFullScan, snapshot);
 				if (!result) return; // Fatal error already handled
 
-				const { succeeded, failed, conflicts } = result;
-				// A failed cycle leaves the cursor possibly ahead of committed state →
-				// next cycle must cold-reconcile; a clean cycle clears the flag.
-				this.recoverViaColdScan = failed > 0;
-				if (failed > 0) {
+				const { succeeded, failed, blocked, conflicts } = result;
+				// If failures are all quarantined permanent local-origin actions, cold scan is not needed next cycle
+				this.recoverViaColdScan = this.needsColdRecovery(result.result);
+				if (failed > 0 || blocked > 0) {
 					this.deps.onStatusChange("partial_error");
-					this.deps.logger?.warn("Sync completed with errors", { succeeded, conflicts, failed });
+					this.deps.logger?.warn("Sync completed with errors", { succeeded, conflicts, failed, blocked });
 				} else {
 					this.deps.onStatusChange("idle");
-					this.deps.logger?.info("Sync completed", { succeeded, conflicts, failed });
+					this.deps.logger?.info("Sync completed", { succeeded, conflicts, failed, blocked });
 				}
 
 				summary.add(result.result);
@@ -305,6 +444,7 @@ export class SyncOrchestrator {
 					result: lastResult,
 					succeeded: lastResult.succeeded.length,
 					failed: lastResult.failed.length,
+					blocked: lastResult.blocked.length,
 					conflicts: lastResult.conflicts.length,
 				};
 			} catch (err) {
@@ -563,10 +703,13 @@ export class SyncOrchestrator {
 			},
 			logger: this.deps.logger,
 			classifyError: (err) => provider?.classifyError?.(err) ?? classifyHttpError(err),
+			isActionBlocked: (action) => this.failedActionTracker.isBlocked(settings.backendType, action),
 			transferPool: this.deps.isMobile() ? MOBILE_TRANSFER_POOL : DESKTOP_TRANSFER_POOL,
 		};
 
 		const result = await executePlan(executionPlan, ctx);
+		const classifyError = (err: unknown) => provider?.classifyError?.(err) ?? classifyHttpError(err);
+		this.updateFailedActionTracker(settings.backendType, result, classifyError);
 
 		// Persist backend state. commitCheckpoint advances the delta cursor (+ file map,
 		// atomically) only on a fully clean cycle; a partial sync keeps the prior cursor.
@@ -587,5 +730,35 @@ export class SyncOrchestrator {
 		await this.deps.saveSettings();
 
 		return result;
+	}
+
+	private updateFailedActionTracker(
+		backendType: string,
+		result: ExecutionResult,
+		classifyError: (err: unknown) => ErrorClassification,
+	): void {
+		for (const succeeded of result.succeeded) {
+			this.failedActionTracker.recordSuccess(backendType, succeeded.action);
+		}
+		for (const failed of result.failed) {
+			this.failedActionTracker.recordFailure(
+				backendType,
+				failed,
+				classifyError(failed.error),
+			);
+		}
+	}
+
+	private needsColdRecovery(result: ExecutionResult): boolean {
+		const settings = this.deps.getSettings();
+		const provider = this.deps.backendProvider();
+		const classifyError = (err: unknown) => provider?.classifyError?.(err) ?? classifyHttpError(err);
+		return result.failed.some((failed) =>
+			!this.failedActionTracker.isBlockingFailure(
+				settings.backendType,
+				failed,
+				classifyError(failed.error),
+			)
+		);
 	}
 }

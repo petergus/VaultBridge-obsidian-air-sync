@@ -18,12 +18,14 @@ export class AuthError extends Error {
  * - `storageFull` — remote quota exhausted ⇒ abort; retrying won't help until space is freed.
  * - `transient` — network blip / 5xx / unknown ⇒ retry with backoff.
  */
-export type ErrorKind = "auth" | "permission" | "rateLimit" | "notFound" | "storageFull" | "transient";
+export type ErrorKind = "auth" | "permission" | "rateLimit" | "notFound" | "storageFull" | "transient" | "permanent";
 
 export interface ErrorClassification {
 	kind: ErrorKind;
 	/** Server-requested delay before retry, derived from a Retry-After header (ms). */
 	retryAfterMs?: number;
+	/** Machine-readable code to isolate and quarantine permanent failures. */
+	permanentCode?: string;
 }
 
 export interface ErrorInfo {
@@ -82,6 +84,12 @@ export function getErrorInfo(err: unknown): ErrorInfo {
  */
 export function classifyHttpError(err: unknown): ErrorClassification {
 	if (err instanceof AuthError) return { kind: "auth" };
+	if (err && typeof err === "object" && (err as { permanent?: unknown }).permanent === true) {
+		const permanentCode = (err as { permanentCode?: unknown }).permanentCode;
+		return typeof permanentCode === "string" && permanentCode.length > 0
+			? { kind: "permanent", permanentCode }
+			: { kind: "permanent" };
+	}
 	const { status, retryAfter } = getErrorInfo(err);
 	const retryAfterMs = retryAfter !== null ? retryAfter * 1000 : undefined;
 	if (status === 401) return { kind: "auth" };
@@ -131,7 +139,7 @@ export function decideRetry(
 	if (classification.kind === "auth") return { action: "abort", kind: "auth" };
 	if (classification.kind === "permission") return { action: "abort", kind: "permission" };
 	if (classification.kind === "storageFull") return { action: "abort", kind: "permission" };
-	if (classification.kind === "notFound") return { action: "stop" };
+	if (classification.kind === "notFound" || classification.kind === "permanent") return { action: "stop" };
 	if (attempt >= maxRetries) return { action: "exhausted" };
 
 	const rawDelay = classification.retryAfterMs != null
