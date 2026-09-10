@@ -139,8 +139,7 @@ export default class VaultBridgePlugin extends Plugin {
 		this.settingTab = new VaultBridgeSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
 
-		// OAuth callback via obsidian://vaultbridge-auth?access_token=...&state=... or ?code=...&state=...
-		this.registerObsidianProtocolHandler("vaultbridge-auth", (params) => {
+		const completeAuthFromProtocol = (params: Record<string, string>) => {
 			if (!params.access_token && !params.code) {
 				new Notice("Authorization failed: no token or code received");
 				return;
@@ -151,14 +150,22 @@ export default class VaultBridgePlugin extends Plugin {
 				url.searchParams.set(key, value);
 			}
 			void this.backendManager.completeBackendConnect(url.toString());
-		});
+		};
+
+		// OAuth callback via obsidian://vaultbridge-auth?access_token=...&state=... or ?code=...&state=...
+		this.registerObsidianProtocolHandler("vaultbridge-auth", completeAuthFromProtocol);
+		// Backward-compatible alias for the hosted Google auth relay while it still
+		// redirects to the original Air Sync action.
+		this.registerObsidianProtocolHandler("air-sync-auth", completeAuthFromProtocol);
 
 		// Web folder-picker result via obsidian://vaultbridge-folder. Backend-agnostic:
 		// BackendManager routes to the active backend's completeWebFolderPick. Kept
 		// separate from auth — distinct payload, no sniffing dispatch needed.
-		this.registerObsidianProtocolHandler("vaultbridge-folder", (params) => {
+		const completeFolderPickFromProtocol = (params: Record<string, string>) => {
 			void this.backendManager.completeBackendFolderPick(params);
-		});
+		};
+		this.registerObsidianProtocolHandler("vaultbridge-folder", completeFolderPickFromProtocol);
+		this.registerObsidianProtocolHandler("air-sync-folder", completeFolderPickFromProtocol);
 
 		// Initialize backend if configured
 		await this.backendManager.initBackend();
