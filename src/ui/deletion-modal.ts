@@ -59,12 +59,21 @@ export class DeletionReviewModal extends Modal {
 			return;
 		}
 
-		contentEl.createEl("p", {
-			text: `${pending.length} deletion(s) were quarantined by VaultBridge to protect your cloud storage against accidental data loss.`,
-		});
+		const hasLocal = pending.some((a) => a.action === "delete_local");
+		const hasRemote = pending.some((a) => a.action === "delete_remote");
 
 		contentEl.createEl("p", {
-			text: "If you intentionally deleted these files in Obsidian or via git, click 'Delete from remote storage' to apply the deletions to the cloud. If this was unintended, dismiss this modal to keep them safe on the cloud.",
+			text: `${pending.length} deletion(s) were quarantined by VaultBridge to protect against accidental data loss.`,
+		});
+
+		const desc = hasLocal && !hasRemote
+			? "These items were deleted in cloud storage or on another device. Click 'Delete from this device' to remove them from this vault as well. If unintended, dismiss this modal to keep your local copies."
+			: hasLocal && hasRemote
+			? "These deletions were quarantined to protect against accidental data loss. Click 'Apply deletions' to apply them across your vault and cloud storage."
+			: "If you intentionally deleted these files in Obsidian or via git, click 'Delete from remote storage' to apply the deletions to the cloud. If this was unintended, dismiss this modal to keep them safe on the cloud.";
+
+		contentEl.createEl("p", {
+			text: desc,
 			cls: "mod-warning",
 		});
 
@@ -77,14 +86,21 @@ export class DeletionReviewModal extends Modal {
 			});
 		}
 
+		const btnLabel = hasLocal && !hasRemote
+			? "Delete from this device"
+			: hasLocal && hasRemote
+			? "Apply deletions"
+			: "Delete from remote storage";
+
 		new Setting(contentEl)
 			.addButton((btn) => {
 				btn
-					.setButtonText("Delete from remote storage")
+					.setButtonText(btnLabel)
 					.setWarning()
 					.onClick(async () => {
 						this.close();
-						new Notice(`Applying ${pending.length} deletions to remote storage...`);
+						const targetDesc = hasLocal && !hasRemote ? "this device" : hasLocal && hasRemote ? "vault and cloud" : "remote storage";
+						new Notice(`Applying ${pending.length} deletions to ${targetDesc}...`);
 						try {
 							await this.orchestrator.approvePendingDeletions();
 							this.onApproved?.();

@@ -166,6 +166,7 @@ describe("isOwnPluginDataPath", () => {
 	});
 
 	it("matches vaultbridge and legacy air-sync data.json as well", () => {
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/vaultbridge-sync/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/vaultbridge/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/obsidian-vaultbridge/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/air-sync/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);

@@ -1,5 +1,5 @@
 {
-	"id": "vaultbridge",
+	"id": "vaultbridge-sync",
 	"name": "VaultBridge",
 	"version": "0.1.33",
 	"minAppVersion": "1.11.4",

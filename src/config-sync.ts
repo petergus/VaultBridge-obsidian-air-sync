@@ -39,7 +39,7 @@ export function getConfigSyncIgnorePatterns(
 	const optionalPatterns = optionalSubtrees.flatMap(([subtree, enabled]) =>
 		enabled ? [`!${dir}/${subtree}`, `!${dir}/${subtree}/**`] : [],
 	);
-	const ownPluginIds = [pluginId, "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"];
+	const ownPluginIds = [pluginId, "vaultbridge-sync", "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"];
 	const uniqueOwnIds = Array.from(new Set(ownPluginIds));
 	// Only data.json (credentials, vaultId) is excluded. The plugin's code files
 	// (main.js, manifest.json, styles.css) sync like any other plugin's, so a build
@@ -93,7 +93,7 @@ export function getEffectiveIgnorePatterns(
  * device's backend credentials/vaultId to another device.
  */
 export function isOwnPluginDataPath(path: string, configDir: string, pluginId: string): boolean {
-	const ownPluginIds = new Set([pluginId, "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"]);
+	const ownPluginIds = new Set([pluginId, "vaultbridge-sync", "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"]);
 	for (const id of ownPluginIds) {
 		if (path === `${configDir}/plugins/${id}/data.json`) {
 			return true;
