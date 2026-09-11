@@ -203,8 +203,13 @@ export class DirectDeleteConfirmModal extends Modal {
 			}
 
 			// 3. Delete in Obsidian vault
-			// eslint-disable-next-line obsidianmd/prefer-file-manager-trash-file -- intentional permanent delete
-			await this.app.vault.delete(this.file, true);
+			(this.app as any).__vaultbridge_suppress_trash_modal = true;
+			try {
+				// eslint-disable-next-line obsidianmd/prefer-file-manager-trash-file -- intentional permanent delete
+				await this.app.vault.delete(this.file, true);
+			} finally {
+				delete (this.app as any).__vaultbridge_suppress_trash_modal;
+			}
 
 			new Notice(`Successfully deleted "${name}" from Vault and ${displayName}.`);
 			onDeleted?.();

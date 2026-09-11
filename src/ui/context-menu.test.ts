@@ -422,8 +422,8 @@ describe("registerContextMenuHandlers", () => {
 		});
 	});
 
-	describe("Delete from Vault & Cloud context menu item", () => {
-		it("adds delete menu item when orchestrator is provided in deps", () => {
+	describe("Normal delete hook and confirmation", () => {
+		it("does not add a separate delete menu item, only hooks the normal delete", () => {
 			const mockOrchestrator = {
 				state: { delete: vi.fn() },
 				runSync: vi.fn(),
@@ -449,13 +449,12 @@ describe("registerContextMenuHandlers", () => {
 			workspaceEventHandlers["file-menu"]!(menu, mockFile);
 
 			const items = getMenuItems(menu);
-			expect(items.length).toBe(2);
+			// Only "Open in Google Drive" added by VaultBridge — no duplicate delete menu item!
+			expect(items.length).toBe(1);
 			expect(items[0]!.title).toBe("Open in Google Drive");
-			expect(items[1]!.title).toBe("Delete from vault & Google Drive...");
-			expect(items[1]!.icon).toBe("trash");
 		});
 
-		it("does not add delete menu item for vault root", () => {
+		it("hooks the existing normal delete menu item to trigger confirmation modal", () => {
 			const mockOrchestrator = {
 				state: { delete: vi.fn() },
 				runSync: vi.fn(),
@@ -476,13 +475,20 @@ describe("registerContextMenuHandlers", () => {
 			mockGetRemoteFs.mockReturnValue({ getWebUrl: vi.fn(), delete: vi.fn() } as unknown as IFileSystem);
 
 			const menu = new Menu();
-			const rootFolder = { path: "", name: "" } as TAbstractFile;
+			// Simulate Obsidian's core Delete item pre-existing in the menu
+			menu.addItem((item) => {
+				item.setTitle("Delete");
+				item.setIcon("trash");
+				item.onClick(vi.fn());
+			});
 
-			workspaceEventHandlers["file-menu"]!(menu, rootFolder);
+			const mockFile = { path: "Projects/Note.md", name: "Note.md" } as TAbstractFile;
+			workspaceEventHandlers["file-menu"]!(menu, mockFile);
 
 			const items = getMenuItems(menu);
-			// Open item is present, but delete item is NOT added for root
-			expect(items.some((i) => i.title.startsWith("Delete"))).toBe(false);
+			const deleteItem = items.find((i) => i.title.toLowerCase().includes("delete"));
+			expect(deleteItem).toBeDefined();
+			expect((deleteItem as any).__vaultbridge_hooked).toBe(true);
 		});
 	});
 });

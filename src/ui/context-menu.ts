@@ -58,33 +58,98 @@ export function setupMenuItem(
 		});
 }
 
-export function setupDeleteMenuItem(
-	item: MenuItem,
+export function hookNormalDeleteItem(
+	menu: Menu,
 	file: TAbstractFile,
 	deps: ContextMenuDeps,
 ): void {
 	if (!deps.orchestrator) return;
-
 	const provider = deps.backendManager.getBackendProvider();
 	if (!provider) return;
-
 	const remoteFs = deps.backendManager.getRemoteFs();
 	if (!remoteFs) return;
-
-	if (!file.path || file.path === "/" || file.path === "") return;
+	if (!file || !file.path || file.path === "/" || file.path === "") return;
 
 	const displayName = getCleanDisplayName(provider.displayName);
 
-	item
-		.setTitle(`Delete from vault & ${displayName}...`)
-		.setIcon("trash")
-		.onClick(() => {
+	const tryHookItem = (item: any) => {
+		if (!item || item.__vaultbridge_hooked) return false;
+		const title = (item.title || item.titleEl?.textContent || "").toLowerCase();
+		const icon = (item.icon || "").toLowerCase();
+		if (title.includes("delete") || icon.includes("trash")) {
+			item.__vaultbridge_hooked = true;
+			item.onClick(() => {
+				new DirectDeleteConfirmModal(deps.app, file, {
+					remoteFs,
+					orchestrator: deps.orchestrator,
+					displayName,
+				}).open();
+			});
+			return true;
+		}
+		return false;
+	};
+
+	const items = (menu as any).items as any[] | undefined;
+	if (Array.isArray(items)) {
+		for (const it of items) {
+			tryHookItem(it);
+		}
+	}
+
+	if (!(menu as any).__vaultbridge_add_item_wrapped) {
+		(menu as any).__vaultbridge_add_item_wrapped = true;
+		const origAddItem = menu.addItem.bind(menu);
+		menu.addItem = function (cb: (item: MenuItem) => any) {
+			return origAddItem((item: MenuItem) => {
+				cb(item);
+				tryHookItem(item);
+			});
+		};
+	}
+}
+
+export function registerTrashFileHook(deps: ContextMenuDeps): () => void {
+	const fileManager = deps.app.fileManager;
+	if (!fileManager || typeof fileManager.trashFile !== "function") {
+		return () => {};
+	}
+
+	const originalTrashFile = fileManager.trashFile.bind(fileManager);
+
+	fileManager.trashFile = async (file: TAbstractFile) => {
+		if ((deps.app as any).__vaultbridge_suppress_trash_modal) {
+			return originalTrashFile(file);
+		}
+
+		const provider = deps.backendManager.getBackendProvider();
+		const remoteFs = deps.backendManager.getRemoteFs();
+		if (
+			!provider ||
+			!remoteFs ||
+			!deps.orchestrator ||
+			!file?.path ||
+			file.path === "/" ||
+			file.path === ""
+		) {
+			return originalTrashFile(file);
+		}
+
+		const displayName = getCleanDisplayName(provider.displayName);
+
+		return new Promise<void>((resolve) => {
 			new DirectDeleteConfirmModal(deps.app, file, {
 				remoteFs,
 				orchestrator: deps.orchestrator,
 				displayName,
+				onDeleted: () => resolve(),
 			}).open();
 		});
+	};
+
+	return () => {
+		fileManager.trashFile = originalTrashFile;
+	};
 }
 
 export function setupMultiMenuItem(
@@ -153,28 +218,22 @@ export function registerContextMenuHandlers(
 
 	const addSingleItemToMenu = (menu: Menu, file: TAbstractFile) => {
 		if (!file) return;
+
+		hookNormalDeleteItem(menu, file, deps);
+
 		if ((menu as any).__vaultbridge_context_menu_added) return;
 
 		const provider = deps.backendManager.getBackendProvider();
 		if (!provider) return;
 
 		const remoteFs = deps.backendManager.getRemoteFs();
-		if (!remoteFs) return;
-		if (!remoteFs.getWebUrl && !deps.orchestrator) return;
+		if (!remoteFs?.getWebUrl) return;
 
 		(menu as any).__vaultbridge_context_menu_added = true;
 
-		if (remoteFs.getWebUrl) {
-			menu.addItem((item) => {
-				setupMenuItem(item, file, deps);
-			});
-		}
-
-		if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
-			menu.addItem((item) => {
-				setupDeleteMenuItem(item, file, deps);
-			});
-		}
+		menu.addItem((item) => {
+			setupMenuItem(item, file, deps);
+		});
 	};
 
 	// 1. Right-click in File Explorer or tab headers (Obsidian core event)
@@ -242,11 +301,6 @@ export function registerContextMenuHandlers(
 								setupMenuItem(item, file, deps);
 							});
 						}
-						if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
-							addItem((item: MenuItem) => {
-								setupDeleteMenuItem(item, file, deps);
-							});
-						}
 					}
 				},
 			);
@@ -265,11 +319,6 @@ export function registerContextMenuHandlers(
 								(item as any).menu.__vaultbridge_context_menu_added = true;
 							}
 							setupMenuItem(item, folder, deps);
-						});
-					}
-					if (deps.orchestrator && folder.path && folder.path !== "/" && folder.path !== "") {
-						addItem((item: MenuItem) => {
-							setupDeleteMenuItem(item, folder, deps);
 						});
 					}
 				},
@@ -308,25 +357,22 @@ export function registerContextMenuHandlers(
 	Menu.prototype.showAtMouseEvent = function (evt: MouseEvent) {
 		try {
 			hookNotebookNavigator();
+			const target = (evt?.target as any) || lastContextMenuTarget;
+			const file = resolveFileFromElement(target, deps.app);
+			if (file) {
+				hookNormalDeleteItem(this, file, deps);
+			}
+
 			if (!(this as any).__vaultbridge_context_menu_added) {
 				const provider = deps.backendManager.getBackendProvider();
 				const remoteFs = deps.backendManager.getRemoteFs();
-				if (provider && remoteFs && (remoteFs.getWebUrl || deps.orchestrator)) {
-					const target = (evt?.target as any) || lastContextMenuTarget;
-					const file = resolveFileFromElement(target, deps.app);
+				if (provider && remoteFs && remoteFs.getWebUrl) {
 					if (file) {
 						(this as any).__vaultbridge_context_menu_added = true;
 						this.addSeparator();
-						if (remoteFs.getWebUrl) {
-							this.addItem((item) => {
-								setupMenuItem(item, file, deps);
-							});
-						}
-						if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
-							this.addItem((item) => {
-								setupDeleteMenuItem(item, file, deps);
-							});
-						}
+						this.addItem((item) => {
+							setupMenuItem(item, file, deps);
+						});
 					}
 				}
 			}
@@ -339,24 +385,21 @@ export function registerContextMenuHandlers(
 	Menu.prototype.showAtPosition = function (pos: any, doc?: Document) {
 		try {
 			hookNotebookNavigator();
+			const file = resolveFileFromElement(lastContextMenuTarget, deps.app);
+			if (file && Date.now() - lastContextMenuTime < 1000) {
+				hookNormalDeleteItem(this, file, deps);
+			}
+
 			if (!(this as any).__vaultbridge_context_menu_added && Date.now() - lastContextMenuTime < 1000) {
 				const provider = deps.backendManager.getBackendProvider();
 				const remoteFs = deps.backendManager.getRemoteFs();
-				if (provider && remoteFs && (remoteFs.getWebUrl || deps.orchestrator)) {
-					const file = resolveFileFromElement(lastContextMenuTarget, deps.app);
+				if (provider && remoteFs && remoteFs.getWebUrl) {
 					if (file) {
 						(this as any).__vaultbridge_context_menu_added = true;
 						this.addSeparator();
-						if (remoteFs.getWebUrl) {
-							this.addItem((item) => {
-								setupMenuItem(item, file, deps);
-							});
-						}
-						if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
-							this.addItem((item) => {
-								setupDeleteMenuItem(item, file, deps);
-							});
-						}
+						this.addItem((item) => {
+							setupMenuItem(item, file, deps);
+						});
 					}
 				}
 			}
@@ -366,8 +409,11 @@ export function registerContextMenuHandlers(
 		return origShowAtPosition.call(this, pos, doc);
 	};
 
+	const unhookTrash = registerTrashFileHook(deps);
+
 	if (deps.registerCleanup) {
 		deps.registerCleanup(() => {
+			unhookTrash();
 			Menu.prototype.showAtMouseEvent = origShowAtMouseEvent;
 			Menu.prototype.showAtPosition = origShowAtPosition;
 		});

@@ -189,7 +189,12 @@ export class LocalFs implements IFileSystem {
 		}
 		const file = this.vault.getAbstractFileByPath(path);
 		if (file) {
-			await this.app.fileManager.trashFile(file);
+			(this.app as any).__vaultbridge_suppress_trash_modal = true;
+			try {
+				await this.app.fileManager.trashFile(file);
+			} finally {
+				delete (this.app as any).__vaultbridge_suppress_trash_modal;
+			}
 			// Verify if the file/folder was actually deleted. On some platforms (like mobile
 			// when "System trash" is selected), trashFile can silently no-op.
 			// Fall back to a permanent delete in that case.
