@@ -16,6 +16,7 @@ import { ConflictHistory } from "./sync/conflict-history";
 import { ConflictTracker } from "./sync/conflict-tracker";
 import { handleOAuthProtocolCallback } from "./fs/oauth-callback-error";
 import { registerContextMenuHandlers } from "./ui/context-menu";
+import { DeletionReviewModal } from "./ui/deletion-modal";
 
 export default class VaultBridgePlugin extends Plugin {
 	settings!: VaultBridgeSettings;
@@ -31,6 +32,7 @@ export default class VaultBridgePlugin extends Plugin {
 	private logger!: Logger;
 	private conflictHistory!: ConflictHistory;
 	conflictTracker!: ConflictTracker;
+	private deletionModalOpen = false;
 
 	async onload() {
 		// Init the registry BEFORE loadSettings: the backendData normalization there
@@ -127,6 +129,10 @@ export default class VaultBridgePlugin extends Plugin {
 			isLayoutReady: () => this.app.workspace.layoutReady,
 			recordConflicts: (records) => this.conflictHistory.append(records),
 			updateConflictTracker: (paths) => this.conflictTracker.updateIndex(paths),
+			onDeletionsHeld: () => {
+				this.updateStatusBar();
+				this.openDeletionReviewModal();
+			},
 		});
 
 		this.scheduler = new SyncScheduler({
@@ -212,6 +218,13 @@ export default class VaultBridgePlugin extends Plugin {
 			},
 		});
 		this.addCommand({
+			id: "review-held-deletions",
+			name: "Review held deletions",
+			callback: () => {
+				this.openDeletionReviewModal();
+			},
+		});
+		this.addCommand({
 			id: "open-active-file-in-remote",
 			name: "Open active file in Google Drive",
 			callback: async () => {
@@ -254,6 +267,11 @@ export default class VaultBridgePlugin extends Plugin {
 		});
 
 		this.statusBarEl = this.addStatusBarItem();
+		this.registerDomEvent(this.statusBarEl, "click", () => {
+			if (this.orchestrator?.getPendingDeletions().length > 0) {
+				this.openDeletionReviewModal();
+			}
+		});
 		this.updateStatusBar();
 
 		this.scheduler.start();
@@ -271,6 +289,7 @@ export default class VaultBridgePlugin extends Plugin {
 		registerContextMenuHandlers({
 			app: this.app,
 			backendManager: this.backendManager,
+			orchestrator: this.orchestrator,
 			registerEvent: (ref) => this.registerEvent(ref),
 			registerDomEvent: (el, type, cb, options) => this.registerDomEvent(el as any, type as any, cb, options),
 			registerCleanup: (cb) => this.register(cb),
@@ -379,8 +398,32 @@ export default class VaultBridgePlugin extends Plugin {
 		await this.orchestrator.rescan();
 	}
 
+	openDeletionReviewModal(): void {
+		if (this.deletionModalOpen) return;
+		this.deletionModalOpen = true;
+		const modal = new DeletionReviewModal(this.app, this.orchestrator, () => {
+			this.updateStatusBar();
+		});
+		const origOnClose = modal.onClose.bind(modal);
+		modal.onClose = () => {
+			origOnClose();
+			this.deletionModalOpen = false;
+			this.updateStatusBar();
+		};
+		modal.open();
+	}
+
 	private updateStatusBar(): void {
 		if (!this.statusBarEl) return;
+		const pendingCount = this.orchestrator?.getPendingDeletions().length ?? 0;
+		if (pendingCount > 0) {
+			this.statusBarEl.setText(`⚠️ ${pendingCount} held deletion${pendingCount === 1 ? "" : "s"}`);
+			this.statusBarEl.addClass("mod-clickable");
+			setTooltip(this.statusBarEl, "Click to review held deletions", { placement: "top" });
+			return;
+		}
+		this.statusBarEl.removeClass("mod-clickable");
+		setTooltip(this.statusBarEl, "", { placement: "top" });
 		switch (this.syncStatus) {
 			case "idle":
 				this.statusBarEl.setText("Synced");

@@ -1,10 +1,13 @@
 import type { App, EventRef, MarkdownFileInfo, MarkdownView, MenuItem, TAbstractFile } from "obsidian";
 import { Menu, Notice } from "obsidian";
 import type { BackendManager } from "../fs/backend-manager";
+import type { SyncOrchestrator } from "../sync/orchestrator";
+import { DirectDeleteConfirmModal } from "./deletion-modal";
 
 export interface ContextMenuDeps {
 	app: App;
 	backendManager: BackendManager;
+	orchestrator?: SyncOrchestrator;
 	registerEvent?: (ref: EventRef) => void;
 	registerDomEvent?: (
 		el: Window | Document | HTMLElement,
@@ -52,6 +55,35 @@ export function setupMenuItem(
 			} catch {
 				new Notice(`Failed to open "${name}" in ${displayName}`);
 			}
+		});
+}
+
+export function setupDeleteMenuItem(
+	item: MenuItem,
+	file: TAbstractFile,
+	deps: ContextMenuDeps,
+): void {
+	if (!deps.orchestrator) return;
+
+	const provider = deps.backendManager.getBackendProvider();
+	if (!provider) return;
+
+	const remoteFs = deps.backendManager.getRemoteFs();
+	if (!remoteFs) return;
+
+	if (!file.path || file.path === "/" || file.path === "") return;
+
+	const displayName = getCleanDisplayName(provider.displayName);
+
+	item
+		.setTitle(`Delete from vault & ${displayName}...`)
+		.setIcon("trash")
+		.onClick(() => {
+			new DirectDeleteConfirmModal(deps.app, file, {
+				remoteFs,
+				orchestrator: deps.orchestrator,
+				displayName,
+			}).open();
 		});
 }
 
@@ -108,8 +140,8 @@ function resolveFileFromElement(el: any, app: App): TAbstractFile | null {
 }
 
 /**
- * Register file-menu, files-menu, and editor-menu handlers to add an "Open in <Backend>"
- * item (e.g. "Open in Google Drive") when the active backend supports getWebUrl.
+ * Register file-menu, files-menu, and editor-menu handlers to add "Open in <Backend>"
+ * and "Delete from Vault & <Backend>..." items.
  * Also hooks Notebook Navigator API and Menu.prototype for full compatibility.
  */
 export function registerContextMenuHandlers(
@@ -127,13 +159,22 @@ export function registerContextMenuHandlers(
 		if (!provider) return;
 
 		const remoteFs = deps.backendManager.getRemoteFs();
-		if (!remoteFs?.getWebUrl) return;
+		if (!remoteFs) return;
+		if (!remoteFs.getWebUrl && !deps.orchestrator) return;
 
 		(menu as any).__vaultbridge_context_menu_added = true;
 
-		menu.addItem((item) => {
-			setupMenuItem(item, file, deps);
-		});
+		if (remoteFs.getWebUrl) {
+			menu.addItem((item) => {
+				setupMenuItem(item, file, deps);
+			});
+		}
+
+		if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
+			menu.addItem((item) => {
+				setupDeleteMenuItem(item, file, deps);
+			});
+		}
 	};
 
 	// 1. Right-click in File Explorer or tab headers (Obsidian core event)
@@ -193,12 +234,19 @@ export function registerContextMenuHandlers(
 							setupMultiMenuItem(item, selection.files, deps);
 						});
 					} else {
-						addItem((item: MenuItem) => {
-							if ((item as any).menu) {
-								(item as any).menu.__vaultbridge_context_menu_added = true;
-							}
-							setupMenuItem(item, file, deps);
-						});
+						if (deps.backendManager.getRemoteFs()?.getWebUrl) {
+							addItem((item: MenuItem) => {
+								if ((item as any).menu) {
+									(item as any).menu.__vaultbridge_context_menu_added = true;
+								}
+								setupMenuItem(item, file, deps);
+							});
+						}
+						if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
+							addItem((item: MenuItem) => {
+								setupDeleteMenuItem(item, file, deps);
+							});
+						}
 					}
 				},
 			);
@@ -211,12 +259,19 @@ export function registerContextMenuHandlers(
 			const unregFolder = nnPlugin.api.menus.registerFolderMenu(
 				({ addItem, folder }: any) => {
 					if (!folder) return;
-					addItem((item: MenuItem) => {
-						if ((item as any).menu) {
-							(item as any).menu.__vaultbridge_context_menu_added = true;
-						}
-						setupMenuItem(item, folder, deps);
-					});
+					if (deps.backendManager.getRemoteFs()?.getWebUrl) {
+						addItem((item: MenuItem) => {
+							if ((item as any).menu) {
+								(item as any).menu.__vaultbridge_context_menu_added = true;
+							}
+							setupMenuItem(item, folder, deps);
+						});
+					}
+					if (deps.orchestrator && folder.path && folder.path !== "/" && folder.path !== "") {
+						addItem((item: MenuItem) => {
+							setupDeleteMenuItem(item, folder, deps);
+						});
+					}
 				},
 			);
 			if (typeof unregFolder === "function" && deps.registerCleanup) {
@@ -256,15 +311,22 @@ export function registerContextMenuHandlers(
 			if (!(this as any).__vaultbridge_context_menu_added) {
 				const provider = deps.backendManager.getBackendProvider();
 				const remoteFs = deps.backendManager.getRemoteFs();
-				if (provider && remoteFs?.getWebUrl) {
+				if (provider && remoteFs && (remoteFs.getWebUrl || deps.orchestrator)) {
 					const target = (evt?.target as any) || lastContextMenuTarget;
 					const file = resolveFileFromElement(target, deps.app);
 					if (file) {
 						(this as any).__vaultbridge_context_menu_added = true;
 						this.addSeparator();
-						this.addItem((item) => {
-							setupMenuItem(item, file, deps);
-						});
+						if (remoteFs.getWebUrl) {
+							this.addItem((item) => {
+								setupMenuItem(item, file, deps);
+							});
+						}
+						if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
+							this.addItem((item) => {
+								setupDeleteMenuItem(item, file, deps);
+							});
+						}
 					}
 				}
 			}
@@ -280,14 +342,21 @@ export function registerContextMenuHandlers(
 			if (!(this as any).__vaultbridge_context_menu_added && Date.now() - lastContextMenuTime < 1000) {
 				const provider = deps.backendManager.getBackendProvider();
 				const remoteFs = deps.backendManager.getRemoteFs();
-				if (provider && remoteFs?.getWebUrl) {
+				if (provider && remoteFs && (remoteFs.getWebUrl || deps.orchestrator)) {
 					const file = resolveFileFromElement(lastContextMenuTarget, deps.app);
 					if (file) {
 						(this as any).__vaultbridge_context_menu_added = true;
 						this.addSeparator();
-						this.addItem((item) => {
-							setupMenuItem(item, file, deps);
-						});
+						if (remoteFs.getWebUrl) {
+							this.addItem((item) => {
+								setupMenuItem(item, file, deps);
+							});
+						}
+						if (deps.orchestrator && file.path && file.path !== "/" && file.path !== "") {
+							this.addItem((item) => {
+								setupDeleteMenuItem(item, file, deps);
+							});
+						}
 					}
 				}
 			}

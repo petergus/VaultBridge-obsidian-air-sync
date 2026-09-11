@@ -97,6 +97,9 @@ export class Setting {
 		let handler: () => void = () => {};
 		const btn = {
 			setButtonText: (_t: string) => btn,
+			setWarning: () => btn,
+			setCta: () => btn,
+			setClass: (_c: string) => btn,
 			onClick: (h: () => void) => {
 				handler = h;
 				return btn;
@@ -134,6 +137,9 @@ export class TFile {
 		this.path = path;
 		this.stat = { size, mtime };
 	}
+	get name(): string {
+		return this.path.split("/").pop() ?? this.path;
+	}
 }
 
 export class TFolder {
@@ -143,6 +149,9 @@ export class TFolder {
 	children: (TFile | TFolder)[] = [];
 	constructor(path: string) {
 		this.path = path;
+	}
+	get name(): string {
+		return this.path.split("/").pop() ?? this.path;
 	}
 }
 

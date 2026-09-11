@@ -26,6 +26,12 @@ describe("published command IDs are stable", () => {
 		// Guard against the regex silently matching nothing (e.g. commands moved
 		// behind a helper wrapper) and the snapshot degrading to a vacuous pass.
 		expect(ids.length).toBeGreaterThan(0);
-		expect(ids).toEqual(["sync-now", "rescan-vault", "approve-held-deletions", "open-active-file-in-remote"]);
+		expect(ids).toEqual([
+			"sync-now",
+			"rescan-vault",
+			"approve-held-deletions",
+			"review-held-deletions",
+			"open-active-file-in-remote",
+		]);
 	});
 });

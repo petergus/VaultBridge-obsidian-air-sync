@@ -421,4 +421,68 @@ describe("registerContextMenuHandlers", () => {
 			expect(Menu.prototype.showAtMouseEvent).toBe(originalShow);
 		});
 	});
+
+	describe("Delete from Vault & Cloud context menu item", () => {
+		it("adds delete menu item when orchestrator is provided in deps", () => {
+			const mockOrchestrator = {
+				state: { delete: vi.fn() },
+				runSync: vi.fn(),
+			};
+
+			registerContextMenuHandlers({
+				app: mockApp,
+				backendManager: mockBackendManager,
+				orchestrator: mockOrchestrator as any,
+				registerEvent: (ref) => registeredEvents.push(ref as never),
+				registerDomEvent: (_el, type, cb) => {
+					domEventHandlers[type] = cb;
+				},
+				registerCleanup: (cb) => cleanupCallbacks.push(cb),
+			});
+
+			mockGetBackendProvider.mockReturnValue({ displayName: "Google Drive" } as IBackendProvider);
+			mockGetRemoteFs.mockReturnValue({ getWebUrl: vi.fn(), delete: vi.fn() } as unknown as IFileSystem);
+
+			const menu = new Menu();
+			const mockFile = { path: "Projects/Note.md", name: "Note.md" } as TAbstractFile;
+
+			workspaceEventHandlers["file-menu"]!(menu, mockFile);
+
+			const items = getMenuItems(menu);
+			expect(items.length).toBe(2);
+			expect(items[0]!.title).toBe("Open in Google Drive");
+			expect(items[1]!.title).toBe("Delete from vault & Google Drive...");
+			expect(items[1]!.icon).toBe("trash");
+		});
+
+		it("does not add delete menu item for vault root", () => {
+			const mockOrchestrator = {
+				state: { delete: vi.fn() },
+				runSync: vi.fn(),
+			};
+
+			registerContextMenuHandlers({
+				app: mockApp,
+				backendManager: mockBackendManager,
+				orchestrator: mockOrchestrator as any,
+				registerEvent: (ref) => registeredEvents.push(ref as never),
+				registerDomEvent: (_el, type, cb) => {
+					domEventHandlers[type] = cb;
+				},
+				registerCleanup: (cb) => cleanupCallbacks.push(cb),
+			});
+
+			mockGetBackendProvider.mockReturnValue({ displayName: "Google Drive" } as IBackendProvider);
+			mockGetRemoteFs.mockReturnValue({ getWebUrl: vi.fn(), delete: vi.fn() } as unknown as IFileSystem);
+
+			const menu = new Menu();
+			const rootFolder = { path: "", name: "" } as TAbstractFile;
+
+			workspaceEventHandlers["file-menu"]!(menu, rootFolder);
+
+			const items = getMenuItems(menu);
+			// Open item is present, but delete item is NOT added for root
+			expect(items.some((i) => i.title.startsWith("Delete"))).toBe(false);
+		});
+	});
 });
