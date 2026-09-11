@@ -106,24 +106,56 @@ export function coalesceLocalFolderRenames(
 		const oldPrefix = oldFolder + "/";
 		const newPrefix = newFolder + "/";
 
-		const descendants: RenamePair[] = [];
-		let skipReason: SkippedRename["reason"] | null = null;
-
+		// 1. Explicit file rename pairs (if provided by caller/tests)
+		const candidatePairs = new Map<string, string>();
 		for (const [newFile, oldFile] of fileRenamePairs) {
 			if (!oldFile.startsWith(oldPrefix) || !newFile.startsWith(newPrefix)) continue;
 			const suffix = oldFile.substring(oldPrefix.length);
 			if (newFile !== newPrefix + suffix) continue;
+			candidatePairs.set(newFile, oldFile);
+		}
 
-			const del = byPath.get(oldFile);
-			const push = byPath.get(newFile);
-			if (!del || !push || !isValidLocalRename(del, push)) {
-				skipReason = classifySkipReason(del, push);
-				logger?.debug("Folder rename: validation failed", {
-					oldFile, newFile, reason: skipReason,
-				});
-				break;
+		// 2. Discover pairs directly from actions: Obsidian's rename event only fires for
+		// TFolder, not for individual child files. When the folder is renamed locally,
+		// planSync emits delete_remote under oldPrefix and push under newPrefix.
+		for (const a of actions) {
+			if (a.action === "delete_remote" && a.path.startsWith(oldPrefix)) {
+				const suffix = a.path.substring(oldPrefix.length);
+				const expectedNew = newPrefix + suffix;
+				if (!candidatePairs.has(expectedNew)) {
+					candidatePairs.set(expectedNew, a.path);
+				}
 			}
-			descendants.push({ oldPath: oldFile, newPath: newFile });
+		}
+
+		// If there are files being pushed under newPrefix that do not correspond to any
+		// file in the old folder (new files added to the new folder), we cannot coalesce
+		// the entire directory atomically because uploads must not precede the folder rename.
+		let skipReason: SkippedRename["reason"] | null = null;
+		const hasExtraNewFiles = actions.some(
+			(a) =>
+				a.action === "push" &&
+				a.path.startsWith(newPrefix) &&
+				!candidatePairs.has(a.path),
+		);
+		if (hasExtraNewFiles) {
+			skipReason = "action_type_mismatch";
+		}
+
+		const descendants: RenamePair[] = [];
+		if (!skipReason) {
+			for (const [newFile, oldFile] of candidatePairs) {
+				const del = byPath.get(oldFile);
+				const push = byPath.get(newFile);
+				if (!del || !push || !isValidLocalRename(del, push)) {
+					skipReason = classifySkipReason(del, push);
+					logger?.debug("Folder rename: validation failed", {
+						oldFile, newFile, reason: skipReason,
+					});
+					break;
+				}
+				descendants.push({ oldPath: oldFile, newPath: newFile });
+			}
 		}
 
 		if (skipReason) {
@@ -155,13 +187,29 @@ export function coalesceLocalFolderRenames(
 		logger?.debug("Folder rename coalesced", { oldFolder, newFolder, descendants: descendants.length });
 	}
 
-	if (consumed.size === 0) {
-		return { actions, remainingFileRenames: fileRenamePairs, applied, skipped };
-	}
-
 	const remaining = new Map<string, string>();
 	for (const [newPath, oldPath] of fileRenamePairs) {
 		if (!consumedFileRenames.has(newPath)) remaining.set(newPath, oldPath);
+	}
+
+	// For skipped folders, provide any discovered candidate pairs that weren't consumed
+	// so that optimizeLocalFileRenames can still optimize valid individual files as file renames
+	for (const { pair } of skipped) {
+		const oldPrefix = pair.oldPath + "/";
+		const newPrefix = pair.newPath + "/";
+		for (const a of actions) {
+			if (a.action === "delete_remote" && a.path.startsWith(oldPrefix)) {
+				const suffix = a.path.substring(oldPrefix.length);
+				const expectedNew = newPrefix + suffix;
+				if (!consumed.has(a.path) && !consumed.has(expectedNew) && !remaining.has(expectedNew)) {
+					remaining.set(expectedNew, a.path);
+				}
+			}
+		}
+	}
+
+	if (consumed.size === 0) {
+		return { actions, remainingFileRenames: remaining, applied, skipped };
 	}
 
 	return {

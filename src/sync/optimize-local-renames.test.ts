@@ -439,4 +439,88 @@ describe("coalesceLocalFolderRenames", () => {
 		]);
 		expect(result.remainingFileRenames.size).toBe(2);
 	});
+
+	it("coalesces folder rename when fileRenamePairs is empty (Obsidian event model)", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "OldDir/doc1.md",
+				action: "delete_remote",
+				remote: entity("OldDir/doc1.md", "hash1"),
+				baseline: baseline("OldDir/doc1.md", "hash1"),
+			},
+			{
+				path: "NewDir/doc1.md",
+				action: "push",
+				local: entity("NewDir/doc1.md", "hash1"),
+			},
+			{
+				path: "OldDir/sub/doc2.md",
+				action: "delete_remote",
+				remote: entity("OldDir/sub/doc2.md", "hash2"),
+				baseline: baseline("OldDir/sub/doc2.md", "hash2"),
+			},
+			{
+				path: "NewDir/sub/doc2.md",
+				action: "push",
+				local: entity("NewDir/sub/doc2.md", "hash2"),
+			},
+		];
+		const folderPairs = new Map([["NewDir", "OldDir"]]);
+		const filePairs = new Map<string, string>(); // Empty, as Obsidian does not fire child renames
+
+		const result = coalesceLocalFolderRenames(actions, folderPairs, filePairs);
+
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({
+			path: "NewDir",
+			action: "rename_remote",
+			oldPath: "OldDir",
+			isFolder: true,
+		});
+		const renameAction = result.actions[0] as {
+			descendants: { oldPath: string; newPath: string }[];
+		};
+		expect(renameAction.descendants).toHaveLength(2);
+		expect(renameAction.descendants).toEqual([
+			{ oldPath: "OldDir/doc1.md", newPath: "NewDir/doc1.md" },
+			{ oldPath: "OldDir/sub/doc2.md", newPath: "NewDir/sub/doc2.md" },
+		]);
+		expect(result.applied).toEqual([
+			{ oldPath: "OldDir", newPath: "NewDir", isFolder: true },
+		]);
+		expect(result.skipped).toHaveLength(0);
+		expect(result.remainingFileRenames.size).toBe(0);
+	});
+
+	it("skips whole-folder coalesce when new folder has extra pushed file, but preserves valid file pairs", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "OldDir/doc1.md",
+				action: "delete_remote",
+				remote: entity("OldDir/doc1.md", "hash1"),
+				baseline: baseline("OldDir/doc1.md", "hash1"),
+			},
+			{
+				path: "NewDir/doc1.md",
+				action: "push",
+				local: entity("NewDir/doc1.md", "hash1"),
+			},
+			{
+				path: "NewDir/brandNew.md",
+				action: "push",
+				local: entity("NewDir/brandNew.md", "hashBrandNew"),
+			},
+		];
+		const folderPairs = new Map([["NewDir", "OldDir"]]);
+		const filePairs = new Map<string, string>();
+
+		const result = coalesceLocalFolderRenames(actions, folderPairs, filePairs);
+
+		expect(result.actions).toHaveLength(3);
+		expect(result.skipped).toEqual([
+			{ pair: { oldPath: "OldDir", newPath: "NewDir" }, reason: "action_type_mismatch" },
+		]);
+		// Valid matching file pair is provided for per-file rename optimization
+		expect(result.remainingFileRenames.get("NewDir/doc1.md")).toBe("OldDir/doc1.md");
+	});
 });

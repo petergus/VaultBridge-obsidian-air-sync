@@ -695,6 +695,26 @@ describe("collectChanges — temperature selection", () => {
 
 			expect(entries[0]!.local!.hash).toBe("");
 		});
+
+		it("enriches hashes for files under folderRenamePairs prefix", async () => {
+			addFile(localFs, "NewFolder/note1.md", "content 1", 1000);
+			addFile(localFs, "NewFolder/sub/note2.md", "content 2", 1000);
+			addFile(localFs, "Unrelated/note3.md", "content 3", 1000);
+
+			const entries = [
+				entry("NewFolder/note1.md", ""),
+				entry("NewFolder/sub/note2.md", ""),
+				entry("Unrelated/note3.md", ""),
+			];
+
+			const folderPairs = new Map([["NewFolder", "OldFolder"]]);
+
+			await enrichHashesForRenames(entries, localFs, new Map(), folderPairs);
+
+			expect(entries[0]!.local!.hash).not.toBe("");
+			expect(entries[1]!.local!.hash).not.toBe("");
+			expect(entries[2]!.local!.hash).toBe(""); // Unrelated stays unenriched
+		});
 	});
 });
 

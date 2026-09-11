@@ -66,8 +66,14 @@ export async function collectChanges(
 
 	let changeSet: ChangeSet;
 
-	// Determine temperature
-	if (!opts.forceFullScan && changes.initialized && changes.dirtyPaths.size > 0) {
+	// Determine temperature: folder renames require a listing scan (WARM/COLD) to discover all descendants
+	const hasFolderRenames = (changes.folderRenamePairs?.size ?? 0) > 0;
+	if (
+		!opts.forceFullScan &&
+		changes.initialized &&
+		changes.dirtyPaths.size > 0 &&
+		!hasFolderRenames
+	) {
 		changeSet = await collectHot(deps, extraPaths);
 	} else {
 		const allRecords = await stateStore.getAll();
@@ -80,7 +86,12 @@ export async function collectChanges(
 	await enrichHashesForInitialMatch(changeSet.entries, deps.localFs);
 
 	// Ensure rename-related local entries have hashes (WARM/COLD use list() → hash:"")
-	await enrichHashesForRenames(changeSet.entries, deps.localFs, changes.renamePairs);
+	await enrichHashesForRenames(
+		changeSet.entries,
+		deps.localFs,
+		changes.renamePairs,
+		changes.folderRenamePairs,
+	);
 
 	// Both warm and cold infer local deletions from absence in list(), which can
 	// under-report (warm: vault index; cold: post-error full scan that may be
@@ -329,12 +340,23 @@ export async function enrichHashesForRenames(
 	entries: MixedEntity[],
 	localFs: IFileSystem,
 	renamePairs: ReadonlyMap<string, string>,
+	folderRenamePairs?: ReadonlyMap<string, string>,
 ): Promise<void> {
-	if (renamePairs.size === 0) return;
+	const hasFileRenames = renamePairs.size > 0;
+	const hasFolderRenames = (folderRenamePairs?.size ?? 0) > 0;
+	if (!hasFileRenames && !hasFolderRenames) return;
 
 	const newPaths = new Set(renamePairs.keys());
+	const folderPrefixes = hasFolderRenames
+		? Array.from(folderRenamePairs!.keys()).map((p) => p + "/")
+		: [];
+
 	const candidates = entries.filter(
-		(e) => newPaths.has(e.path) && e.local && !e.local.hash,
+		(e) =>
+			e.local &&
+			!e.local.hash &&
+			(newPaths.has(e.path) ||
+				folderPrefixes.some((prefix) => e.path.startsWith(prefix))),
 	);
 	if (candidates.length === 0) return;
 
