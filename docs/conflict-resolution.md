@@ -23,14 +23,15 @@ auto_merge
   │     ├── yes → attempt 3-way merge
   │     │           ├── merge-eligible (text, <=1 MB) + base content in store?
   │     │           │     ├── success (no conflicts) → write merged to both sides → "merged"
-  │     │           │     ├── has conflicts (markers) → write merged to both sides → "merged" (hasConflictMarkers: true)
-  │     │           │     └── JSON/Canvas with conflict markers OR invalid-JSON result → duplicate
+  │     │           │     ├── has conflicts (markers), .md/.txt → write merged to both sides → "merged" (hasConflictMarkers: true)
+  │     │           │     ├── has conflicts, any other extension → duplicate (markers would corrupt code/config/JSON)
+  │     │           │     └── JSON/Canvas clean merge that is not valid JSON → duplicate
   │     │           └── not eligible / no base → newer-wins fallback
   │     └── no  → newer-wins
   └── newer-wins
         ├── one side deleted → other side wins
         ├── both deleted → no-op (kept_local)
-        ├── both exist, both mtimes > 0 → newer wins (overwrites older side)
+        ├── both exist, both mtimes > 0 and different → newer wins; the older version is kept as a `.conflict` copy on both sides (no copy when the bytes are identical)
         ├── same mtime + same content → keep local (content identical)
         └── same mtime or unknown mtime, different content → duplicate
 ```

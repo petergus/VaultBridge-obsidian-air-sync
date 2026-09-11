@@ -143,6 +143,17 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Advanced").setHeading();
 
 		new Setting(containerEl)
+			.setName("Sync now")
+			.setDesc(
+				"Run a sync right away. Also available from the command palette and, on desktop, the cloud icon in the status bar."
+			)
+			.addButton((button) =>
+				button.setButtonText("Sync now").setCta().onClick(() => {
+					void this.plugin.runSync();
+				})
+			);
+
+		new Setting(containerEl)
 			.setName("Rescan vault")
 			.setDesc(
 				"Discard the remote sync checkpoint and fully reconcile against the remote on the next sync. Use this if sync seems stuck or incomplete after an interrupted sync. It compares files rather than re-downloading them, and keeps your sync history."
@@ -157,7 +168,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Maximum deletions per sync")
 			.setDesc(
-				"Stop the entire sync before it changes anything when more than this many local and remote deletions are planned. Renames do not count. Minimum 1."
+				"When more than this many local and remote deletions are planned, the deletions are held (everything else still syncs) until you approve them from the command palette. Renames do not count. Minimum 1."
 			)
 			.addText((text) =>
 				text

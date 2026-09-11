@@ -12,6 +12,9 @@ import { AsyncPool, AdaptivePool } from "../queue/async-queue";
 import type { AdaptivePoolOpts } from "../queue/async-queue";
 import { decideRetry, sleep } from "./error";
 import { pruneEmptyParentFolders } from "./prune-empty-folders";
+import { assertLocalUnchangedSincePlan, localEntityForPushedContent } from "./transfer-guards";
+
+export { LocalChangedDuringSyncError } from "./transfer-guards";
 
 export interface CompletedAction {
 	action: SyncAction;
@@ -389,9 +392,7 @@ async function runActionIO(
 			}
 			const content = await localFs.read(path);
 			const remoteEntity = await remoteFs.write(path, content, action.local.mtime);
-			// stat() may return null if the file was deleted between read and stat (race condition);
-			// fall back to action.local which is the pre-sync metadata
-			const localEntity = await localFs.stat(path) ?? action.local;
+			const localEntity = await localEntityForPushedContent(localFs, path, content, action.local);
 			return { localEntity, remoteEntity };
 		}
 
@@ -403,6 +404,9 @@ async function runActionIO(
 				return { localEntity, remoteEntity };
 			}
 			const content = await remoteFs.read(path);
+			// Checked after the download, right before the overwrite, to keep the race
+			// window as small as possible.
+			await assertLocalUnchangedSincePlan(localFs, action);
 			const localEntity = await localFs.write(path, content, action.remote.mtime);
 			// stat() may return null if the file was deleted between write and stat (race condition);
 			// fall back to action.remote which is the pre-sync metadata

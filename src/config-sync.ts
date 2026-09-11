@@ -41,8 +41,11 @@ export function getConfigSyncIgnorePatterns(
 	);
 	const ownPluginIds = [pluginId, "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"];
 	const uniqueOwnIds = Array.from(new Set(ownPluginIds));
+	// Only data.json (credentials, vaultId) is excluded. The plugin's code files
+	// (main.js, manifest.json, styles.css) sync like any other plugin's, so a build
+	// installed on one device reaches the others.
 	const ownExclusions = settings.syncConfigPlugins
-		? uniqueOwnIds.map((id) => `${dir}/plugins/${escapeGlobChars(id)}/**`)
+		? uniqueOwnIds.map((id) => `${dir}/plugins/${escapeGlobChars(id)}/data.json`)
 		: [];
 
 	return [

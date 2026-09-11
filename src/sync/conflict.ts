@@ -93,26 +93,72 @@ async function keepNewer(
 	if (local && !remote) {
 		return keepLocal(path, localFs, remoteFs, local);
 	}
-	if (!local && !remote) {
+	if (!local || !remote) {
 		return { action: "kept_local" };
 	}
 
-	// Both exist — compare mtime only when both are known (> 0)
-	if (local!.mtime > 0 && remote!.mtime > 0) {
-		if (local!.mtime > remote!.mtime) {
-			return keepLocal(path, localFs, remoteFs, local);
-		}
-		if (local!.mtime < remote!.mtime) {
-			return keepRemote(path, localFs, remoteFs, remote);
-		}
+	// Both exist with comparable, different mtimes: the newer side wins the original
+	// path and the older version is kept as a `.conflict` copy. The mtimes come from
+	// different device clocks, so "newer" is a best guess, never grounds to discard the
+	// other side's edits.
+	if (local.mtime > 0 && remote.mtime > 0 && local.mtime !== remote.mtime) {
+		return keepWinnerWithBackup(
+			path, localFs, remoteFs, local, remote,
+			local.mtime > remote.mtime ? "local" : "remote",
+		);
 	}
 	// Same mtime or unknown mtime: compare by content hash — if identical, keep local; otherwise tieBreak.
 	// Remote FileEntity.hash is "" for backends that don't compute it on list/stat (e.g. Google Drive);
 	// fall back to remoteChecksum in that case.
-	if (sameContent(local!, remote!)) {
+	if (sameContent(local, remote)) {
 		return keepLocal(path, localFs, remoteFs, local); // content identical
 	}
 	return duplicate(path, localFs, remoteFs, local, remote);
+}
+
+function buffersEqual(a: ArrayBuffer, b: ArrayBuffer): boolean {
+	if (a.byteLength !== b.byteLength) return false;
+	const va = new Uint8Array(a);
+	const vb = new Uint8Array(b);
+	for (let i = 0; i < va.length; i++) {
+		if (va[i] !== vb[i]) return false;
+	}
+	return true;
+}
+
+/**
+ * Write the winner's content to the original path on both sides, after saving the
+ * loser's content as a `.conflict` copy on both sides. Byte-identical content needs
+ * no copy.
+ */
+async function keepWinnerWithBackup(
+	path: string,
+	localFs: IFileSystem,
+	remoteFs: IFileSystem,
+	local: FileEntity,
+	remote: FileEntity,
+	winner: "local" | "remote",
+): Promise<ConflictResolutionResult> {
+	const localContent = await localFs.read(path);
+	const remoteContent = await remoteFs.read(path);
+	const action = winner === "local" ? "kept_local" : "kept_remote";
+	if (buffersEqual(localContent, remoteContent)) {
+		return { action };
+	}
+
+	const [loserContent, loser] = winner === "local"
+		? [remoteContent, remote]
+		: [localContent, local];
+	const duplicatePath = await generateConflictPath(path, localFs, remoteFs);
+	await localFs.write(duplicatePath, loserContent, loser.mtime);
+	await remoteFs.write(duplicatePath, loserContent, loser.mtime);
+
+	if (winner === "local") {
+		await remoteFs.write(path, localContent, local.mtime);
+	} else {
+		await localFs.write(path, remoteContent, remote.mtime);
+	}
+	return { action, duplicatePath };
 }
 
 async function duplicate(
@@ -143,11 +189,15 @@ async function duplicate(
 
 	// Both exist: save remote as .conflict duplicate on both sides, keep local at original path
 	const remoteContent = await remoteFs.read(path);
+	const localContent = await localFs.read(path);
+	if (buffersEqual(localContent, remoteContent)) {
+		// Byte-identical (e.g. the same edit made on both devices): nothing to preserve.
+		return { action: "kept_local" };
+	}
 	const duplicatePath = await generateConflictPath(path, localFs, remoteFs);
 	await localFs.write(duplicatePath, remoteContent, remote!.mtime);
 	await remoteFs.write(duplicatePath, remoteContent, remote!.mtime);
 
-	const localContent = await localFs.read(path);
 	await remoteFs.write(path, localContent, local!.mtime);
 
 	return { action: "duplicated", duplicatePath };
@@ -264,18 +314,28 @@ async function attemptThreeWayMerge(
 		mergedLines: mergeResult.content.split("\n").length,
 	});
 
-	// For JSON/Canvas files, validate the merge result
 	const ext = getFileExtension(path);
-	if (ext === ".json" || ext === ".canvas") {
-		if (mergeResult.hasConflicts || !isValidJson(mergeResult.content)) {
-			logger?.warn(`${tag}: falling back — merged ${ext} is invalid`, {
-				path,
-				strategy: tag,
-				reason: mergeResult.hasConflicts ? "merge produced conflict markers" : "merged content is not valid JSON",
-				outcome: "duplicate",
-			});
-			return duplicate(path, localFs, remoteFs, local, remote);
-		}
+	// Conflict markers are only safe in prose. Written into code, config, or structured
+	// files (a synced plugin's main.js, a CSS snippet, YAML, JSON) they break the file
+	// on BOTH devices, so an overlapping edit there keeps both versions instead.
+	if (mergeResult.hasConflicts && ext !== ".md" && ext !== ".txt") {
+		logger?.warn(`${tag}: falling back — conflict markers would corrupt ${ext || "this file"}`, {
+			path,
+			strategy: tag,
+			reason: "merge produced conflict markers",
+			outcome: "duplicate",
+		});
+		return duplicate(path, localFs, remoteFs, local, remote);
+	}
+	// For JSON/Canvas files, a clean merge must still be valid JSON
+	if ((ext === ".json" || ext === ".canvas") && !isValidJson(mergeResult.content)) {
+		logger?.warn(`${tag}: falling back — merged ${ext} is invalid`, {
+			path,
+			strategy: tag,
+			reason: "merged content is not valid JSON",
+			outcome: "duplicate",
+		});
+		return duplicate(path, localFs, remoteFs, local, remote);
 	}
 
 	const mergedBuffer = encoder.encode(mergeResult.content).buffer.slice(0);

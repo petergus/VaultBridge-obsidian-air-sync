@@ -38,18 +38,28 @@ export class ConflictTracker {
 	 * Write the list of conflicted file paths back to "sync-conflicts.md".
 	 */
 	async writeIndex(paths: Set<string>): Promise<void> {
+		let content: string;
 		if (paths.size === 0) {
-			const content = `# Sync Conflicts\n\nAll conflicts resolved!\n`;
-			await this.app.vault.adapter.write(INDEX_PATH, content);
-			return;
+			content = `# Sync Conflicts\n\nAll conflicts resolved!\n`;
+		} else {
+			content = `# Sync Conflicts\n\n`;
+			content += `The following files have active conflicts. Once you resolve a conflict by removing the \`> [!sync-conflict]\` callout block(s) from the file, the file will be removed from this list on the next sync or file save.\n\n`;
+			for (const path of Array.from(paths).sort()) {
+				content += `- [[${path}]]\n`;
+			}
 		}
 
-		let content = `# Sync Conflicts\n\n`;
-		content += `The following files have active conflicts. Once you resolve a conflict by removing the \`> [!sync-conflict]\` callout block(s) from the file, the file will be removed from this list on the next sync or file save.\n\n`;
-		for (const path of Array.from(paths).sort()) {
-			content += `- [[${path}]]\n`;
+		// This runs after every sync cycle: don't create the index just to say there
+		// is nothing in it, and don't rewrite an unchanged file each time.
+		const exists = await this.app.vault.adapter.exists(INDEX_PATH);
+		if (!exists && paths.size === 0) return;
+		if (exists) {
+			try {
+				if ((await this.app.vault.adapter.read(INDEX_PATH)) === content) return;
+			} catch {
+				// Unreadable — fall through and rewrite it.
+			}
 		}
-
 		await this.app.vault.adapter.write(INDEX_PATH, content);
 	}
 

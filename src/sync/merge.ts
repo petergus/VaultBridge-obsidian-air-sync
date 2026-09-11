@@ -95,7 +95,10 @@ export function threeWayMerge(
 	);
 
 	if (!hasConflict) {
-		const allHunks = [...localHunks, ...remoteHunks]
+		// A hunk made identically on both sides must be applied ONCE: splicing it twice
+		// duplicates an insertion or deletes extra base lines, silently corrupting the note.
+		const remoteOnlyHunks = remoteHunks.filter((rh) => !localHunks.some((lh) => isSameHunk(lh, rh)));
+		const allHunks = [...localHunks, ...remoteOnlyHunks]
 			.sort((a, b) => b.baseStart - a.baseStart);
 		const result = [...baseLines];
 		for (const h of allHunks) {

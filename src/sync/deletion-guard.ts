@@ -101,6 +101,26 @@ export interface SplitPlan {
 	hasHeld: boolean;
 }
 
+export interface SplitPlanOptions {
+	/**
+	 * Hold every unapproved deletion regardless of the per-plan limit (the rolling
+	 * velocity guard tripped). Must never be expressed as a limit of `0`: `0` means
+	 * "limit disabled", which would let every deletion through.
+	 */
+	holdAll?: boolean;
+	/** Deletions the user explicitly approved: never held, not counted against the limit. */
+	isApproved?: (action: SyncAction) => boolean;
+}
+
+export function isDeletionAction(action: SyncAction): boolean {
+	return action.action === "delete_local" || action.action === "delete_remote";
+}
+
+/** Stable identity of a planned deletion, used to match a user approval to a later plan. */
+export function deletionKey(action: SyncAction): string {
+	return `${action.action}\u0000${action.path}`;
+}
+
 /**
  * Split a sync plan into safe (non-deletion) actions and held (deletion) actions
  * when the deletion count exceeds the configured limit.
@@ -112,32 +132,67 @@ export interface SplitPlan {
  * When the deletion count is within the limit, `held` is empty and `safe`
  * contains the full plan — no change in behaviour.
  */
-export function splitPlanAtLimit(plan: SyncPlan, configuredLimit: number): SplitPlan {
+export function splitPlanAtLimit(
+	plan: SyncPlan,
+	configuredLimit: number,
+	opts: SplitPlanOptions = {},
+): SplitPlan {
 	const limit = Math.floor(configuredLimit);
 	const limitActive = Number.isFinite(limit) && limit > 0;
+	const isApproved = opts.isApproved ?? (() => false);
 
-	let local = 0;
-	let remote = 0;
-	for (const action of plan.actions) {
-		if (action.action === "delete_local") local++;
-		else if (action.action === "delete_remote") remote++;
-	}
-
-	const total = local + remote;
-	if (!limitActive || total <= limit) {
+	const unapproved = plan.actions.filter((a) => isDeletionAction(a) && !isApproved(a));
+	const shouldHold = unapproved.length > 0 &&
+		(opts.holdAll === true || (limitActive && unapproved.length > limit));
+	if (!shouldHold) {
 		return { safe: plan, held: [], hasHeld: false };
 	}
 
-	const safe: SyncAction[] = [];
-	const held: SyncAction[] = [];
+	const held = new Set(unapproved);
+	return {
+		safe: { actions: plan.actions.filter((a) => !held.has(a)) },
+		held: unapproved,
+		hasHeld: true,
+	};
+}
+
+/**
+ * Drop a directory deletion when anything beneath it survives this plan.
+ *
+ * Deleting a directory is recursive on both sides, and deletions run in the
+ * structural phase AFTER transfers and conflicts. So a folder delete planned next to
+ * a push/pull/conflict/rename INTO that folder — a note created inside a folder the
+ * other device deleted, or a modified note there that a conflict restores — would
+ * trash the very file the earlier phase just kept, and the next cycle would then
+ * propagate that loss to the other side as a deletion. The folder is kept instead; its
+ * record converges once the survivors have synced.
+ */
+export function protectFoldersWithSurvivors(plan: SyncPlan): { plan: SyncPlan; protectedFolders: string[] } {
+	const survivorAncestors = new Set<string>();
 	for (const action of plan.actions) {
-		if (action.action === "delete_local" || action.action === "delete_remote") {
-			held.push(action);
-		} else {
-			safe.push(action);
+		if (isDeletionAction(action) || action.action === "cleanup") continue;
+		let slash = action.path.lastIndexOf("/");
+		while (slash > 0) {
+			const ancestor = action.path.substring(0, slash);
+			if (survivorAncestors.has(ancestor)) break;
+			survivorAncestors.add(ancestor);
+			slash = ancestor.lastIndexOf("/");
 		}
 	}
-	return { safe: { actions: safe }, held, hasHeld: true };
+	if (survivorAncestors.size === 0) return { plan, protectedFolders: [] };
+
+	const protectedFolders: string[] = [];
+	const actions = plan.actions.filter((action) => {
+		const entity = action.action === "delete_local" ? action.local
+			: action.action === "delete_remote" ? action.remote
+			: undefined;
+		if (!entity?.isDirectory || !survivorAncestors.has(action.path)) return true;
+		protectedFolders.push(action.path);
+		return false;
+	});
+	return protectedFolders.length > 0
+		? { plan: { actions }, protectedFolders }
+		: { plan, protectedFolders };
 }
 
 /**

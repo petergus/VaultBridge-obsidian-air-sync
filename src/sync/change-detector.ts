@@ -37,6 +37,15 @@ export interface CollectChangesOptions {
 	 * (the cursor has moved past them). A full remote list vs records can.
 	 */
 	forceFullScan?: boolean;
+	/**
+	 * Paths to re-evaluate this cycle on top of the dirty set and the remote delta.
+	 * Used for deletions held for review: the cycle that held them still advanced the
+	 * backend's in-memory delta cursor, so a held REMOTE-origin deletion would vanish
+	 * from the next hot/warm detection. Each path is re-stat'd and re-decided from
+	 * current state — never replayed from the plan that held it. (Cold scans cover
+	 * every path already.)
+	 */
+	extraPaths?: Iterable<string>;
 }
 
 /**
@@ -53,17 +62,18 @@ export async function collectChanges(
 	opts: CollectChangesOptions = {},
 ): Promise<ChangeSet> {
 	const { changes, stateStore } = deps;
+	const extraPaths = new Set(opts.extraPaths ?? []);
 
 	let changeSet: ChangeSet;
 
 	// Determine temperature
 	if (!opts.forceFullScan && changes.initialized && changes.dirtyPaths.size > 0) {
-		changeSet = await collectHot(deps);
+		changeSet = await collectHot(deps, extraPaths);
 	} else {
 		const allRecords = await stateStore.getAll();
 		changeSet = opts.forceFullScan || allRecords.length === 0
 			? await collectCold(deps, allRecords)
-			: await collectWarm(deps, allRecords);
+			: await collectWarm(deps, allRecords, extraPaths);
 	}
 
 	// Enrich empty hashes for entries without baseline (all temperature modes)
@@ -93,7 +103,7 @@ export async function collectChanges(
 	return changeSet;
 }
 
-async function collectHot(deps: ChangeDetectorDeps): Promise<ChangeSet> {
+async function collectHot(deps: ChangeDetectorDeps, extraPaths: ReadonlySet<string>): Promise<ChangeSet> {
 	const { localFs, remoteFs, stateStore, changes } = deps;
 
 	const dirtyPaths = changes.dirtyPaths;
@@ -101,9 +111,12 @@ async function collectHot(deps: ChangeDetectorDeps): Promise<ChangeSet> {
 	// Get remote changed paths if supported
 	const remoteChanges = await getRemoteChanges(remoteFs);
 
-	// Union of local dirty and remote changed paths
+	// Union of local dirty, remote changed, and explicitly re-evaluated paths
 	const changedPaths = new Set<string>(dirtyPaths);
 	for (const p of remoteChanges.paths) {
+		changedPaths.add(p);
+	}
+	for (const p of extraPaths) {
 		changedPaths.add(p);
 	}
 
@@ -141,6 +154,11 @@ async function collectHot(deps: ChangeDetectorDeps): Promise<ChangeSet> {
 		if (!prev) return true;
 		// Local deleted but remote still exists (e.g. rename source)
 		if (!e.local && e.remote) return true;
+		// Remote deleted but local still exists (a remote deletion or the source of a
+		// remote rename). Must be kept: the delta cursor advances past this change, so
+		// dropping it here loses the deletion for good and the stale local copy later
+		// resurrects on the remote.
+		if (e.local && !e.remote) return true;
 		// Local changed
 		if (e.local && hasChanged(e.local, prev)) return true;
 		// Remote changed
@@ -151,7 +169,11 @@ async function collectHot(deps: ChangeDetectorDeps): Promise<ChangeSet> {
 	return { entries: changed, temperature: "hot", remoteRenamePairs: remoteChanges.renamed };
 }
 
-async function collectWarm(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): Promise<ChangeSet> {
+async function collectWarm(
+	deps: ChangeDetectorDeps,
+	allRecords: SyncRecord[],
+	extraPaths: ReadonlySet<string>,
+): Promise<ChangeSet> {
 	const { localFs, remoteFs } = deps;
 
 	const [localFiles, remoteChanges] = await Promise.all([
@@ -188,6 +210,11 @@ async function collectWarm(deps: ChangeDetectorDeps, allRecords: SyncRecord[]): 
 	for (const [newPath, oldPath] of renamePairs) {
 		changedPaths.add(newPath);
 		changedPaths.add(oldPath);
+	}
+
+	// Paths explicitly re-evaluated this cycle (e.g. held deletions)
+	for (const p of extraPaths) {
+		changedPaths.add(p);
 	}
 
 	const isExcluded = deps.isExcluded ?? (() => false);

@@ -199,6 +199,19 @@ export default class VaultBridgePlugin extends Plugin {
 			},
 		});
 		this.addCommand({
+			id: "approve-held-deletions",
+			name: "Approve held deletions",
+			callback: () => {
+				const count = this.orchestrator.getPendingDeletions().length;
+				if (count === 0) {
+					new Notice("No deletions are waiting for approval");
+					return;
+				}
+				new Notice(`Applying ${count} held deletions`);
+				void this.orchestrator.approvePendingDeletions();
+			},
+		});
+		this.addCommand({
 			id: "open-active-file-in-remote",
 			name: "Open active file in Google Drive",
 			callback: async () => {

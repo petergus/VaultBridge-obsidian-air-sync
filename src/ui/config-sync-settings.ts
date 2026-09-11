@@ -27,7 +27,7 @@ const CONFIG_SUBTREE_SETTINGS: ConfigSubtreeSetting[] = [
 		name: "Sync plugins",
 		paths: ["plugins/", "community-plugins.json"],
 		description:
-			"Sync installed plugins, their settings, and the active community plugin list, excluding VaultBridge's own data.",
+			"Sync installed plugins (including VaultBridge itself), their settings, and the active community plugin list. VaultBridge's own settings file (credentials) never syncs.",
 	},
 	{
 		key: "syncConfigSnippets",
