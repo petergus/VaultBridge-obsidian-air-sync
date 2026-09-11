@@ -172,6 +172,21 @@ export class DirectDeleteConfirmModal extends Modal {
 		try {
 			// 1. Delete on remote cloud storage (Google Drive/OneDrive/Dropbox)
 			await remoteFs.delete(path);
+			if (isFolder) {
+				await (remoteFs as any).cacheMutex?.run?.(() => {
+					const cache = (remoteFs as any).cache;
+					if (cache) {
+						const prefix = `${path}/`;
+						for (const [p] of cache.entries()) {
+							if (p.startsWith(prefix)) {
+								cache.removeEntry(p);
+								(remoteFs as any).touchedPaths?.add(p);
+							}
+						}
+					}
+				});
+			}
+			await remoteFs.checkpoint?.commitCheckpoint();
 
 			// 2. Clean up sync baseline store if orchestrator is provided
 			if (orchestrator?.state) {

@@ -507,7 +507,21 @@ export abstract class CachingRemoteFs<TFile> implements IFileSystem {
 		});
 
 		// Phase 2: download outside the mutex (network I/O).
-		return this.downloadFile(fileId);
+		try {
+			return await this.downloadFile(fileId);
+		} catch (err) {
+			const isNotFound =
+				(err && typeof err === "object" && "status" in err && (err as { status: number }).status === 404) ||
+				(err instanceof Error && (err.message.includes("File not found") || err.message.toLowerCase().includes("not found")));
+			if (isNotFound) {
+				await this.cacheMutex.run(() => {
+					this.cache.removeEntry(path);
+					this.touchedPaths.add(path);
+				});
+				this.logger?.warn("Evicted deleted remote file from cache on download 404", { path });
+			}
+			throw err;
+		}
 	}
 
 	async listDir(path: string): Promise<FileEntity[]> {
@@ -550,7 +564,12 @@ export abstract class CachingRemoteFs<TFile> implements IFileSystem {
 		// evicted resolves no id at phase 1 and never reaches the network delete.)
 		await this.cacheMutex.run(() => {
 			if (this.cache.idAt(path) === fileId) {
+				const descendants = this.cache.collectDescendants(path);
 				this.cache.removeTree(path);
+				this.touchedPaths.add(path);
+				for (const d of descendants) {
+					this.touchedPaths.add(d);
+				}
 			} else {
 				this.logger?.warn("Skipping stale cache update for delete", { path });
 			}
