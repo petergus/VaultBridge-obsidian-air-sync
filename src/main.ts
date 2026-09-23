@@ -24,7 +24,7 @@ export default class VaultBridgePlugin extends Plugin {
 	backendManager!: BackendManager;
 	private statusBarEl: HTMLElement | null = null;
 	private syncStatus: SyncStatus = "not_connected";
-	private orchestrator!: SyncOrchestrator;
+	orchestrator!: SyncOrchestrator;
 	private scheduler!: SyncScheduler;
 	private wakeLock!: ScreenWakeLockManager;
 	private localTracker!: LocalChangeTracker;

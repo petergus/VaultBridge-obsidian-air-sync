@@ -271,18 +271,23 @@ export class SyncOrchestrator {
 	}
 
 	/**
-	 * Approve the currently held deletions and run a sync that applies them. Also
-	 * resets the velocity window so the approved count doesn't immediately re-trigger
-	 * the rolling cap.
+	 * Approve held deletions and run a sync that applies them. Also resets the
+	 * velocity window so the approved count doesn't immediately re-trigger the
+	 * rolling cap.
+	 *
+	 * When `actionsToApprove` is provided, only those specific deletions are approved
+	 * and any unapproved deletions remain quarantined. Defaults to approving all
+	 * currently pending deletions.
 	 *
 	 * The held actions are NOT replayed. They were planned in an earlier cycle, and a
 	 * file edited or re-created since then must not be deleted from that stale plan.
 	 * The sync re-detects each held path from current state; only deletions it still
 	 * plans for an approved (action, path) pair bypass the guards.
 	 */
-	async approvePendingDeletions(): Promise<void> {
-		if (this.pendingDeletions.length === 0) return;
-		this.approvedDeletionKeys = new Set(this.pendingDeletions.map(deletionKey));
+	async approvePendingDeletions(actionsToApprove?: readonly SyncAction[]): Promise<void> {
+		const target = actionsToApprove ?? this.pendingDeletions;
+		if (target.length === 0) return;
+		this.approvedDeletionKeys = new Set(target.map(deletionKey));
 		this.velocityTracker.reset();
 		this.deps.logger?.info("Held deletions approved", { count: this.approvedDeletionKeys.size });
 		await this.runSync();

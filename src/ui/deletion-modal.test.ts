@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { groupPendingDeletions, DeletionReviewModal, DirectDeleteConfirmModal } from "./deletion-modal";
+import { VaultBridgeSettingTab } from "./settings";
 import type { SyncAction } from "../sync/types";
 import { __ui, Notice, TFile, TFolder } from "../__mocks__/obsidian";
 
@@ -54,13 +55,132 @@ describe("DeletionReviewModal", () => {
 		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any, onApprovedSpy);
 		modal.open();
 
-		// Two buttons: Delete from Remote Storage and Decide Later
+		// Buttons: Approve all deletions and Decide later
 		expect(__ui.buttons.length).toBe(2);
 		await __ui.buttons[0]!.click();
 
 		expect(approveSpy).toHaveBeenCalledTimes(1);
 		expect(onApprovedSpy).toHaveBeenCalledTimes(1);
-		expect(Notice.lastNotice).toContain("Applying 1 deletions");
+		expect(Notice.lastNotice).toContain("Applying 1 deletion");
+	});
+
+	it("supports reviewing both server and local deletions", async () => {
+		const pendingActions: SyncAction[] = [
+			{ path: "server-file.md", action: "delete_remote" },
+			{ path: "local-file.md", action: "delete_local" },
+		];
+
+		const approveSpy = vi.fn().mockResolvedValue(undefined);
+		const mockOrchestrator = {
+			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
+			approvePendingDeletions: approveSpy,
+		};
+
+		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		modal.open();
+
+		// Content should include both server and local deletion details
+		const contentEl = modal.contentEl as any;
+		expect(contentEl.children.length).toBeGreaterThan(0);
+
+		// Trigger approve
+		expect(__ui.buttons.length).toBe(2);
+		await __ui.buttons[0]!.click();
+		expect(approveSpy).toHaveBeenCalledWith(pendingActions);
+	});
+
+	it("filters server deletions and allows selective approval", async () => {
+		const pendingActions: SyncAction[] = [
+			{ path: "server1.md", action: "delete_remote" },
+			{ path: "server2.md", action: "delete_remote" },
+			{ path: "local1.md", action: "delete_local" },
+		];
+
+		const approveSpy = vi.fn().mockResolvedValue(undefined);
+		const mockOrchestrator = {
+			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
+			approvePendingDeletions: approveSpy,
+		};
+
+		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		modal.open();
+
+		// Click Server filter pill
+		const serverPill = (modal as any).pillElements.find((p: any) =>
+			(p.text || "").startsWith("Server")
+		);
+		expect(serverPill).toBeDefined();
+		__ui.buttons = [];
+		serverPill.trigger("click");
+
+		// When filtered to Server deletions (2 items out of 3), approve displayed and approve all should be rendered
+		expect(__ui.buttons.length).toBe(3);
+		await __ui.buttons[0]!.click();
+
+		// Should approve only the 2 server deletions
+		expect(approveSpy).toHaveBeenCalledWith([
+			{ path: "server1.md", action: "delete_remote" },
+			{ path: "server2.md", action: "delete_remote" },
+		]);
+	});
+
+	it("filters by search query", async () => {
+		const pendingActions: SyncAction[] = [
+			{ path: "02-projects/my-note.md", action: "delete_remote" },
+			{ path: "05-sources/archive.pdf", action: "delete_remote" },
+		];
+
+		const approveSpy = vi.fn().mockResolvedValue(undefined);
+		const mockOrchestrator = {
+			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
+			approvePendingDeletions: approveSpy,
+		};
+
+		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		modal.open();
+
+		const searchInput = modal.contentEl.querySelector(".vaultbridge-deletion-search-input") as any;
+		expect(searchInput).toBeDefined();
+		__ui.buttons = [];
+		searchInput.trigger("input", { target: { value: "my-note" } });
+
+		// Filtered down to 1 item
+		expect(__ui.buttons.length).toBe(3);
+		await __ui.buttons[0]!.click();
+		expect(approveSpy).toHaveBeenCalledWith([
+			{ path: "02-projects/my-note.md", action: "delete_remote" },
+		]);
+	});
+
+	it("copies file paths to clipboard", async () => {
+		const pendingActions: SyncAction[] = [
+			{ path: "note1.md", action: "delete_remote" },
+			{ path: "note2.md", action: "delete_local" },
+		];
+
+		const mockOrchestrator = {
+			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
+			approvePendingDeletions: vi.fn(),
+		};
+
+		const writeTextMock = vi.fn().mockResolvedValue(undefined);
+		Object.assign(navigator, {
+			clipboard: { writeText: writeTextMock },
+		});
+
+		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		modal.open();
+
+		const copyBtn = modal.contentEl.querySelector(".vaultbridge-copy-btn") as any;
+		expect(copyBtn).toBeDefined();
+		copyBtn.trigger("click");
+
+		// Give promise a tick
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(writeTextMock).toHaveBeenCalledWith(
+			"[Server] note1.md\n[Local] note2.md"
+		);
+		expect(Notice.lastNotice).toContain("Copied 2 file paths to clipboard");
 	});
 });
 
@@ -159,5 +279,71 @@ describe("DirectDeleteConfirmModal", () => {
 		expect(stateDeleteSpy).toHaveBeenCalledWith("test-folder");
 		expect(stateDeleteSpy).not.toHaveBeenCalledWith("other-folder/b.md");
 		expect(localVaultDeleteSpy).toHaveBeenCalledWith(mockFolder, true);
+	});
+});
+
+describe("VaultBridgeSettingTab - Held Deletions", () => {
+	beforeEach(() => {
+		__ui.buttons = [];
+		__ui.lastModal = null;
+		Notice.lastNotice = null;
+	});
+
+	it("renders held deletions alert in settings when deletions are pending", () => {
+		const pendingActions: SyncAction[] = [
+			{ path: "remote1.md", action: "delete_remote" },
+			{ path: "local1.md", action: "delete_local" },
+		];
+
+		const mockPlugin = {
+			app: {
+				vault: {
+					configDir: ".obsidian",
+				},
+			},
+			orchestrator: {
+				getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
+				approvePendingDeletions: vi.fn().mockResolvedValue(undefined),
+			},
+			conflictTracker: {
+				getTrackedPaths: vi.fn().mockResolvedValue(new Set()),
+			},
+			backendManager: {
+				getBackendProvider: vi.fn().mockReturnValue(null),
+			},
+			settings: {
+				conflictStrategy: "auto_merge",
+				backendType: "googledrive",
+				maxDeletionsPerSync: 20,
+				syncDotPaths: [],
+				enableLogging: false,
+				logLevel: "info",
+				backendData: {},
+				syncDebounceSec: 5,
+				foregroundSyncCooldownSec: 0,
+				pauseSyncWhenOffline: true,
+				screenWakeLockOnSync: true,
+				showSyncNotifications: true,
+				enableConfigSync: false,
+				syncConfigJsonFiles: false,
+				syncConfigPlugins: false,
+				syncConfigSnippets: false,
+				syncConfigThemes: false,
+				syncConfigIcons: false,
+				mobileMaxFileSizeMB: 10,
+			},
+			openDeletionReviewModal: vi.fn(),
+		};
+
+		const settingTab = new VaultBridgeSettingTab({ vault: { configDir: ".obsidian" } } as any, mockPlugin as any);
+		settingTab.renderContent();
+
+		// Buttons: Review deletions, Approve all, Sync now, Rescan
+		const reviewBtn = __ui.buttons.find((b) => b.name === "Held deletions awaiting review");
+		expect(reviewBtn).toBeDefined();
+
+		// Click review deletions
+		reviewBtn!.click();
+		expect(mockPlugin.openDeletionReviewModal).toHaveBeenCalledTimes(1);
 	});
 });

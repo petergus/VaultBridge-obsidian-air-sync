@@ -64,6 +64,44 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 			}
 		});
 
+		// Held deletions panel
+		const pendingDeletions = this.plugin.orchestrator?.getPendingDeletions() ?? [];
+		if (pendingDeletions.length > 0) {
+			const serverCount = pendingDeletions.filter((a) => a.action === "delete_remote").length;
+			const localCount = pendingDeletions.filter((a) => a.action === "delete_local").length;
+			const deletionsContainer = containerEl.createDiv("sync-deletions-settings-container");
+			const alertEl = deletionsContainer.createDiv("sync-deletions-alert-box");
+
+			const desc = serverCount > 0 && localCount > 0
+				? `${pendingDeletions.length} deletions held for safety (${serverCount} server, ${localCount} local). Review before applying.`
+				: serverCount > 0
+				? `${serverCount} server deletion${serverCount === 1 ? "" : "s"} held for safety. Review before removing from cloud storage.`
+				: `${localCount} local deletion${localCount === 1 ? "" : "s"} held for safety. Review before removing from this device.`;
+
+			new Setting(alertEl)
+				.setName("Held deletions awaiting review")
+				.setDesc(desc)
+				.setHeading()
+				.addButton((btn) => {
+					btn
+						.setButtonText("Review deletions")
+						.setCta()
+						.onClick(() => {
+							this.plugin.openDeletionReviewModal();
+						});
+				})
+				.addButton((btn) => {
+					btn
+						.setButtonText("Approve all")
+						.setWarning()
+						.onClick(async () => {
+							new Notice(`Applying ${pendingDeletions.length} held deletions...`);
+							await this.plugin.orchestrator.approvePendingDeletions();
+							this.renderContent();
+						});
+				});
+		}
+
 		new Setting(containerEl).setName("Sync").setHeading();
 
 		new Setting(containerEl)

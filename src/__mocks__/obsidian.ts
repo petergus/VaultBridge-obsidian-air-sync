@@ -46,16 +46,124 @@ export const __ui: {
 	lastModal: { close: () => void } | null;
 } = { buttons: [], lastModal: null };
 
-/** Minimal stand-in for Obsidian's augmented HTMLElement (createEl/empty). */
-class FakeEl {
+/** Minimal stand-in for Obsidian's augmented HTMLElement (createEl/empty/createDiv/createSpan). */
+export class FakeEl {
 	children: FakeEl[] = [];
+	text = "";
+	cls = "";
+	tag = "div";
+	value = "";
+	placeholder = "";
+	style: Record<string, string> = {};
+	attributes: Record<string, string> = {};
+	eventListeners: Record<string, ((e?: any) => void)[]> = {};
+
+	constructor(tag = "div", opts?: { text?: string; cls?: string; value?: string; placeholder?: string }) {
+		this.tag = tag;
+		if (opts?.text) this.text = opts.text;
+		if (opts?.cls) this.cls = opts.cls;
+		if (opts?.value) this.value = opts.value;
+		if (opts?.placeholder) this.placeholder = opts.placeholder;
+	}
+
 	empty(): void {
 		this.children = [];
+		this.text = "";
 	}
-	createEl(_tag: string, _opts?: { text?: string; cls?: string }): FakeEl {
-		const el = new FakeEl();
+
+	createEl(tag: string, opts?: { text?: string; cls?: string; value?: string; placeholder?: string; type?: string } | string): FakeEl {
+		const options = typeof opts === "string" ? { cls: opts } : opts;
+		const el = new FakeEl(tag, options);
 		this.children.push(el);
 		return el;
+	}
+
+	createDiv(opts?: { text?: string; cls?: string } | string): FakeEl {
+		const options = typeof opts === "string" ? { cls: opts } : opts;
+		return this.createEl("div", options);
+	}
+
+	createSpan(opts?: { text?: string; cls?: string } | string): FakeEl {
+		const options = typeof opts === "string" ? { cls: opts } : opts;
+		return this.createEl("span", options);
+	}
+
+	setText(text: string): this {
+		this.text = text;
+		return this;
+	}
+
+	getText(): string {
+		return this.text;
+	}
+
+	addClass(...classes: string[]): this {
+		const existing = this.cls ? this.cls.split(/\s+/).filter(Boolean) : [];
+		for (const c of classes) {
+			if (!existing.includes(c)) existing.push(c);
+		}
+		this.cls = existing.join(" ");
+		return this;
+	}
+
+	removeClass(...classes: string[]): this {
+		const existing = this.cls ? this.cls.split(/\s+/).filter(Boolean) : [];
+		this.cls = existing.filter((c) => !classes.includes(c)).join(" ");
+		return this;
+	}
+
+	hasClass(className: string): boolean {
+		return (this.cls ? this.cls.split(/\s+/).filter(Boolean) : []).includes(className);
+	}
+
+	setAttribute(name: string, value: string): void {
+		this.attributes[name] = value;
+	}
+
+	getAttribute(name: string): string | undefined {
+		return this.attributes[name];
+	}
+
+	addEventListener(type: string, listener: (e?: any) => void): void {
+		if (!this.eventListeners[type]) this.eventListeners[type] = [];
+		this.eventListeners[type].push(listener);
+	}
+
+	trigger(type: string, event?: any): void {
+		const listeners = this.eventListeners[type] ?? [];
+		for (const listener of listeners) {
+			listener(event ?? { target: this });
+		}
+	}
+
+	click(): void {
+		this.trigger("click");
+	}
+
+	querySelector(selector: string): FakeEl | null {
+		const all = this.querySelectorAll(selector);
+		return all.length > 0 ? all[0]! : null;
+	}
+
+	querySelectorAll(selector: string): FakeEl[] {
+		const results: FakeEl[] = [];
+		const isClass = selector.startsWith(".");
+		const className = isClass ? selector.slice(1) : "";
+		const tag = !isClass ? selector.toLowerCase() : "";
+
+		const search = (node: FakeEl) => {
+			for (const child of node.children) {
+				if (isClass && child.hasClass(className)) {
+					results.push(child);
+				} else if (tag && child.tag.toLowerCase() === tag) {
+					results.push(child);
+				}
+				search(child);
+			}
+		};
+
+		search(this);
+		return results;
 	}
 }
 
@@ -417,12 +525,13 @@ export class App {
 
 export class PluginSettingTab {
 	app: unknown;
+	private _containerEl = new FakeEl();
 	constructor(app: unknown, _plugin: unknown) {
 		this.app = app;
 	}
 	display() {}
 	get containerEl(): HTMLElement {
-		return document.createElement("div");
+		return this._containerEl as unknown as HTMLElement;
 	}
 }
 
