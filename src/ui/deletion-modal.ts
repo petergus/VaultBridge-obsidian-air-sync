@@ -49,6 +49,7 @@ export class DeletionReviewModal extends Modal {
 	}
 
 	onOpen(): void {
+		this.modalEl?.addClass("vaultbridge-deletion-modal");
 		this.renderModal();
 	}
 
@@ -198,6 +199,7 @@ export class DeletionReviewModal extends Modal {
 		} else {
 			for (const action of filtered) {
 				const row = listContainer.createDiv("vaultbridge-deletion-row");
+				row.setAttribute("title", action.path);
 
 				const pathEl = row.createDiv("vaultbridge-deletion-path");
 				const parts = action.path.split("/");

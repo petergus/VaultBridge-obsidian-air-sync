@@ -148,8 +148,13 @@
 	cursor: pointer;
 }
 
+.vaultbridge-deletion-modal {
+	max-width: 860px !important;
+	width: 90vw !important;
+}
+
 .vaultbridge-deletion-list {
-	max-height: 280px;
+	max-height: 380px;
 	overflow-y: auto;
 	margin: 8px 0 16px 0;
 	padding: 4px;
@@ -169,9 +174,9 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 6px 10px;
+	padding: 8px 12px;
 	border-bottom: 1px solid var(--background-modifier-border-focus);
-	gap: 12px;
+	gap: 14px;
 }
 
 .vaultbridge-deletion-row:last-child {
@@ -180,30 +185,33 @@
 
 .vaultbridge-deletion-path {
 	font-size: 0.9em;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	word-break: break-word;
+	overflow-wrap: anywhere;
+	white-space: normal;
+	line-height: 1.45;
 	flex: 1;
 }
 
 .vaultbridge-deletion-folder {
 	color: var(--text-muted);
+	opacity: 0.85;
 }
 
 .vaultbridge-deletion-filename {
 	color: var(--text-normal);
-	font-weight: 500;
+	font-weight: 600;
 }
 
 .vaultbridge-badge {
 	display: inline-block;
 	font-size: 0.75em;
-	padding: 2px 8px;
+	padding: 3px 9px;
 	border-radius: 10px;
 	font-weight: 600;
 	text-transform: uppercase;
 	letter-spacing: 0.5px;
 	white-space: nowrap;
+	flex-shrink: 0;
 }
 
 .vaultbridge-badge-remote {
