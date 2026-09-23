@@ -3,6 +3,7 @@ import type { Logger } from "../logging/logger";
 import {
 	optimizeLocalFileRenames,
 	coalesceLocalFolderRenames,
+	optimizeHeuristicRenames,
 } from "./optimize-local-renames";
 import {
 	optimizeRemoteFileRenames,
@@ -72,6 +73,10 @@ export function refinePlan(
 			logger,
 		).actions;
 	}
+
+	// Heuristic content-hash rename matching for moves made outside Obsidian (Finder, Git, etc.)
+	const heuristicResult = optimizeHeuristicRenames(actions, logger);
+	actions = heuristicResult.actions;
 
 	if (remoteRenamePairs.length > 0) {
 		logger?.debug("Remote rename pairs", {

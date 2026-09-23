@@ -688,12 +688,42 @@ describe("collectChanges — temperature selection", () => {
 			expect(entries[0]!.local!.hash).toBe("");
 		});
 
-		it("no-ops when rename pairs is empty", async () => {
+		it("no-ops when rename pairs is empty and no baseline deletions match size", async () => {
 			const entries = [entry("new.md", "")];
 
 			await enrichHashesForRenames(entries, localFs, new Map());
 
 			expect(entries[0]!.local!.hash).toBe("");
+		});
+
+		it("enriches unhashed local additions when matching deleted baseline file size (heuristic move candidate)", async () => {
+			addFile(localFs, "dest/moved.md", "content", 1000);
+			const origStat = localFs.stat.bind(localFs);
+			localFs.stat = async (path: string) => {
+				const e = await origStat(path);
+				if (e) return { ...e, hash: "sha256-moved" };
+				return e;
+			};
+
+			const entries: MixedEntity[] = [
+				{
+					path: "src/moved.md",
+					prevSync: {
+						path: "src/moved.md",
+						hash: "sha256-original",
+						localMtime: 1000,
+						remoteMtime: 1000,
+						localSize: 7,
+						remoteSize: 7,
+						syncedAt: 900,
+					},
+				},
+				entry("dest/moved.md", ""),
+			];
+
+			await enrichHashesForRenames(entries, localFs, new Map());
+
+			expect(entries[1]!.local!.hash).toBe("sha256-moved");
 		});
 
 		it("enriches hashes for files under folderRenamePairs prefix", async () => {

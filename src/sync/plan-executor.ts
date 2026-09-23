@@ -420,6 +420,16 @@ async function runActionIO(
 
 		case "rename_remote": {
 			await remoteFs.rename(action.oldPath, path);
+			if (action.hasContentChange && !action.isFolder) {
+				const content = await localFs.read(path);
+				const plannedLocal = action.local ?? (await localFs.stat(path));
+				const mtime = plannedLocal?.mtime ?? Date.now();
+				const remoteEntity = await remoteFs.write(path, content, mtime);
+				const localEntity = plannedLocal
+					? await localEntityForPushedContent(localFs, path, content, plannedLocal)
+					: (await localFs.stat(path)) ?? undefined;
+				return { localEntity, remoteEntity };
+			}
 			const remoteEntity = await remoteFs.stat(path);
 			const localEntity = await localFs.stat(path) ?? action.local;
 			return { localEntity, remoteEntity: remoteEntity ?? undefined };

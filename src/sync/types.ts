@@ -88,6 +88,8 @@ export interface RenameAction extends SyncActionBase {
 	isFolder?: boolean;
 	/** Descendant path mappings consumed by this folder rename */
 	descendants?: RenamePair[];
+	/** When true, local file content was modified during or after the move (e.g. link updates) and needs writing after remote rename */
+	hasContentChange?: boolean;
 }
 
 /** A single planned action for a path */

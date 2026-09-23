@@ -48,7 +48,7 @@ export function optimizeLocalFileRenames(
 	for (const [newPath, oldPath] of renamePairs) {
 		const del = byPath.get(oldPath);
 		const push = byPath.get(newPath);
-		if (!del || !push || !isValidLocalRename(del, push)) {
+		if (!del || !push) {
 			const reason = classifySkipReason(del, push);
 			skipped.push({ pair: { oldPath, newPath }, reason });
 			logger?.debug("Local rename optimization skipped", {
@@ -56,10 +56,65 @@ export function optimizeLocalFileRenames(
 			});
 			continue;
 		}
+
+		if (del.action !== "delete_remote" || push.action !== "push") {
+			const reason = classifySkipReason(del, push);
+			skipped.push({ pair: { oldPath, newPath }, reason });
+			logger?.debug("Local rename optimization skipped", {
+				newPath, oldPath, reason,
+			});
+			continue;
+		}
+
+		if (push.local?.isDirectory && (del.remote?.isDirectory || del.baseline)) {
+			renamed.push({
+				path: newPath,
+				action: "rename_remote",
+				oldPath,
+				isFolder: true,
+				local: push.local,
+				remote: del.remote,
+				baseline: del.baseline,
+			});
+			consumed.add(oldPath);
+			consumed.add(newPath);
+			applied.push({ oldPath, newPath, isFolder: true });
+			continue;
+		}
+
+		if (!del.baseline?.hash || !push.local?.hash) {
+			const reason = classifySkipReason(del, push);
+			skipped.push({ pair: { oldPath, newPath }, reason });
+			logger?.debug("Local rename optimization skipped", {
+				newPath, oldPath, reason,
+			});
+			continue;
+		}
+
+		const isPure = isValidLocalRename(del, push);
+		if (isPure) {
+			renamed.push({
+				path: newPath,
+				action: "rename_remote",
+				oldPath,
+				local: push.local,
+				remote: del.remote,
+				baseline: del.baseline,
+			});
+			consumed.add(oldPath);
+			consumed.add(newPath);
+			applied.push({ oldPath, newPath });
+			continue;
+		}
+
+		// Content was modified during/after rename (e.g. Obsidian updated internal links):
+		// Execute rename_remote with hasContentChange: true so the remote file is moved
+		// and then updated with new content, avoiding deletion and re-upload.
 		renamed.push({
 			path: newPath,
 			action: "rename_remote",
 			oldPath,
+			hasContentChange: true,
 			local: push.local,
 			remote: del.remote,
 			baseline: del.baseline,
@@ -67,6 +122,7 @@ export function optimizeLocalFileRenames(
 		consumed.add(oldPath);
 		consumed.add(newPath);
 		applied.push({ oldPath, newPath });
+		logger?.info("Local rename with content update optimized", { oldPath, newPath });
 	}
 
 	if (consumed.size === 0) return { actions, applied, skipped };
@@ -147,7 +203,16 @@ export function coalesceLocalFolderRenames(
 			for (const [newFile, oldFile] of candidatePairs) {
 				const del = byPath.get(oldFile);
 				const push = byPath.get(newFile);
-				if (!del || !push || !isValidLocalRename(del, push)) {
+				if (!del || !push) {
+					skipReason = "action_type_mismatch";
+					break;
+				}
+				const isDirectory = !!push.local?.isDirectory || !!del.remote?.isDirectory;
+				if (isDirectory) {
+					descendants.push({ oldPath: oldFile, newPath: newFile, isFolder: true });
+					continue;
+				}
+				if (!isValidLocalRename(del, push)) {
 					skipReason = classifySkipReason(del, push);
 					logger?.debug("Folder rename: validation failed", {
 						oldFile, newFile, reason: skipReason,
@@ -217,5 +282,107 @@ export function coalesceLocalFolderRenames(
 		remainingFileRenames: remaining,
 		applied,
 		skipped,
+	};
+}
+
+/**
+ * Heuristic rename optimization for external moves (e.g. in Finder, Git, or while Obsidian was closed).
+ * Matches unmatched `delete_remote` and `push` actions that share identical content hash and file size.
+ */
+export function optimizeHeuristicRenames(
+	actions: SyncAction[],
+	logger?: Logger,
+): RenameOptResult {
+	const delCandidates: SyncAction[] = [];
+	for (const a of actions) {
+		if (
+			a.action === "delete_remote" &&
+			!a.remote?.isDirectory &&
+			!a.local?.isDirectory &&
+			!!a.baseline?.hash &&
+			(a.baseline?.localSize ?? 0) > 0
+		) {
+			delCandidates.push(a);
+		}
+	}
+
+	if (delCandidates.length === 0) {
+		return { actions, applied: [], skipped: [] };
+	}
+
+	const pushCandidates: SyncAction[] = [];
+	for (const a of actions) {
+		if (
+			a.action === "push" &&
+			!a.local?.isDirectory &&
+			!!a.local?.hash &&
+			(a.local?.size ?? 0) > 0
+		) {
+			pushCandidates.push(a);
+		}
+	}
+
+	if (pushCandidates.length === 0) {
+		return { actions, applied: [], skipped: [] };
+	}
+
+	const pushesByHash = new Map<string, SyncAction[]>();
+	for (const p of pushCandidates) {
+		const hash = p.local!.hash;
+		let list = pushesByHash.get(hash);
+		if (!list) {
+			list = [];
+			pushesByHash.set(hash, list);
+		}
+		list.push(p);
+	}
+
+	const consumed = new Set<string>();
+	const renamed: SyncAction[] = [];
+	const applied: RenamePair[] = [];
+
+	for (const del of delCandidates) {
+		const hash = del.baseline!.hash;
+		const matches = pushesByHash.get(hash);
+		if (!matches || matches.length === 0) continue;
+
+		const available = matches.filter(
+			(p) => !consumed.has(p.path) && p.local!.size === del.baseline!.localSize,
+		);
+		if (available.length === 0) continue;
+
+		const delName = del.path.split("/").pop();
+		let bestMatch = available.find((p) => p.path.split("/").pop() === delName);
+		if (!bestMatch && available.length === 1) {
+			bestMatch = available[0];
+		}
+
+		if (bestMatch) {
+			consumed.add(del.path);
+			consumed.add(bestMatch.path);
+			renamed.push({
+				path: bestMatch.path,
+				action: "rename_remote",
+				oldPath: del.path,
+				local: bestMatch.local,
+				remote: del.remote,
+				baseline: del.baseline,
+			});
+			applied.push({ oldPath: del.path, newPath: bestMatch.path });
+			logger?.info("Heuristic content-match rename optimized", {
+				oldPath: del.path,
+				newPath: bestMatch.path,
+			});
+		}
+	}
+
+	if (consumed.size === 0) {
+		return { actions, applied: [], skipped: [] };
+	}
+
+	return {
+		actions: replaceConsumed(actions, consumed, renamed),
+		applied,
+		skipped: [],
 	};
 }

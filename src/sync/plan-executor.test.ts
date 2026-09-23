@@ -217,6 +217,38 @@ describe("executePlan", () => {
 			expect(stateStore.records.has("old.md")).toBe(false);
 		});
 
+		it("renames remote file and updates its content when hasContentChange is true", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+			addFile(localFs, "new.md", "updated content with new links");
+			addFile(remoteFs, "old.md", "old content");
+			const stateStore = ctx.committer.stateStore as unknown as ReturnType<typeof createMockStateStore>;
+			stateStore.records.set("old.md", {
+				path: "old.md", hash: "h1", localMtime: 1000, remoteMtime: 1000,
+				localSize: 11, remoteSize: 11, syncedAt: 900,
+			});
+
+			const plan = makePlan([{
+				path: "new.md",
+				action: "rename_remote",
+				oldPath: "old.md",
+				hasContentChange: true,
+				local: { path: "new.md", isDirectory: false, size: 31, mtime: 1001, hash: "h2" },
+				remote: { path: "old.md", isDirectory: false, size: 11, mtime: 1000, hash: "h1" },
+				baseline: stateStore.records.get("old.md"),
+			}]);
+
+			const result = await executePlan(plan, ctx);
+
+			expect(result.succeeded).toHaveLength(1);
+			expect(result.failed).toHaveLength(0);
+			expect(remoteFs.files.has("new.md")).toBe(true);
+			expect(remoteFs.files.has("old.md")).toBe(false);
+			expect(readText(remoteFs, "new.md")).toBe("updated content with new links");
+			expect(stateStore.records.has("new.md")).toBe(true);
+			expect(stateStore.records.has("old.md")).toBe(false);
+		});
 	});
 
 	describe("rename_remote with isFolder", () => {

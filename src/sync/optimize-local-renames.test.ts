@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
 	optimizeLocalFileRenames,
 	coalesceLocalFolderRenames,
+	optimizeHeuristicRenames,
 } from "./optimize-local-renames";
 import type { SyncAction, SyncRecord } from "./types";
 import type { FileEntity } from "../fs/types";
@@ -58,7 +59,7 @@ describe("optimizeLocalFileRenames", () => {
 		expect(result.skipped).toHaveLength(0);
 	});
 
-	it("keeps original actions when hashes differ (content changed)", () => {
+	it("converts push+delete_remote to rename_remote with hasContentChange when hashes differ (content changed)", () => {
 		const actions: SyncAction[] = [
 			{
 				path: "old.md",
@@ -71,17 +72,17 @@ describe("optimizeLocalFileRenames", () => {
 		const pairs = new Map([["new.md", "old.md"]]);
 		const result = optimizeLocalFileRenames(actions, pairs);
 
-		expect(result.actions).toHaveLength(2);
-		expect(result.actions.map((a) => a.action)).toEqual([
-			"delete_remote",
-			"push",
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({
+			path: "new.md",
+			action: "rename_remote",
+			oldPath: "old.md",
+			hasContentChange: true,
+		});
+		expect(result.applied).toEqual([
+			{ oldPath: "old.md", newPath: "new.md" },
 		]);
-		expect(result.skipped).toEqual([
-			{
-				pair: { oldPath: "old.md", newPath: "new.md" },
-				reason: "hash_mismatch",
-			},
-		]);
+		expect(result.skipped).toHaveLength(0);
 	});
 
 	it("keeps original actions when oldPath action is not delete_remote", () => {
@@ -172,7 +173,7 @@ describe("optimizeLocalFileRenames", () => {
 			{
 				path: "new-b.md",
 				action: "push",
-				local: entity("new-b.md", "h3"),
+				local: entity("new-b.md", ""),
 			},
 			{
 				path: "other.md",
@@ -523,4 +524,122 @@ describe("coalesceLocalFolderRenames", () => {
 		// Valid matching file pair is provided for per-file rename optimization
 		expect(result.remainingFileRenames.get("NewDir/doc1.md")).toBe("OldDir/doc1.md");
 	});
+
+	it("coalesces folder containing subdirectories without hash_missing error", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "OldDir/sub",
+				action: "delete_remote",
+				remote: { path: "OldDir/sub", isDirectory: true, size: 0, mtime: 0, hash: "" },
+			},
+			{
+				path: "NewDir/sub",
+				action: "push",
+				local: { path: "NewDir/sub", isDirectory: true, size: 0, mtime: 0, hash: "" },
+			},
+			{
+				path: "OldDir/sub/doc.md",
+				action: "delete_remote",
+				remote: entity("OldDir/sub/doc.md", "hash1"),
+				baseline: baseline("OldDir/sub/doc.md", "hash1"),
+			},
+			{
+				path: "NewDir/sub/doc.md",
+				action: "push",
+				local: entity("NewDir/sub/doc.md", "hash1"),
+			},
+		];
+		const folderPairs = new Map([["NewDir", "OldDir"]]);
+		const filePairs = new Map([["NewDir/sub/doc.md", "OldDir/sub/doc.md"]]);
+
+		const result = coalesceLocalFolderRenames(actions, folderPairs, filePairs);
+
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({
+			path: "NewDir",
+			action: "rename_remote",
+			oldPath: "OldDir",
+			isFolder: true,
+		});
+		expect(result.applied).toEqual([
+			{ oldPath: "OldDir", newPath: "NewDir", isFolder: true },
+		]);
+		expect(result.skipped).toHaveLength(0);
+	});
 });
+
+describe("optimizeHeuristicRenames", () => {
+	it("pairs unmatched delete_remote and push with identical hash and size", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "folderA/note.md",
+				action: "delete_remote",
+				remote: entity("folderA/note.md", "hash123"),
+				baseline: baseline("folderA/note.md", "hash123"),
+			},
+			{
+				path: "folderB/note.md",
+				action: "push",
+				local: entity("folderB/note.md", "hash123"),
+			},
+		];
+
+		const result = optimizeHeuristicRenames(actions);
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({
+			path: "folderB/note.md",
+			action: "rename_remote",
+			oldPath: "folderA/note.md",
+		});
+		expect(result.applied).toEqual([
+			{ oldPath: "folderA/note.md", newPath: "folderB/note.md" },
+		]);
+	});
+
+	it("does not pair when hashes differ", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "folderA/note.md",
+				action: "delete_remote",
+				remote: entity("folderA/note.md", "hash1"),
+				baseline: baseline("folderA/note.md", "hash1"),
+			},
+			{
+				path: "folderB/note.md",
+				action: "push",
+				local: entity("folderB/note.md", "hash2"),
+			},
+		];
+
+		const result = optimizeHeuristicRenames(actions);
+		expect(result.actions).toHaveLength(2);
+		expect(result.applied).toHaveLength(0);
+	});
+
+	it("prefers identical filename when multiple files share the same content hash", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "source/unique-name.md",
+				action: "delete_remote",
+				remote: entity("source/unique-name.md", "samehash"),
+				baseline: baseline("source/unique-name.md", "samehash"),
+			},
+			{
+				path: "dest/other.md",
+				action: "push",
+				local: entity("dest/other.md", "samehash"),
+			},
+			{
+				path: "dest/unique-name.md",
+				action: "push",
+				local: entity("dest/unique-name.md", "samehash"),
+			},
+		];
+
+		const result = optimizeHeuristicRenames(actions);
+		expect(result.applied).toEqual([
+			{ oldPath: "source/unique-name.md", newPath: "dest/unique-name.md" },
+		]);
+	});
+});
+

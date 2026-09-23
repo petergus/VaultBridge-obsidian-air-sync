@@ -344,7 +344,16 @@ export async function enrichHashesForRenames(
 ): Promise<void> {
 	const hasFileRenames = renamePairs.size > 0;
 	const hasFolderRenames = (folderRenamePairs?.size ?? 0) > 0;
-	if (!hasFileRenames && !hasFolderRenames) return;
+
+	// Deleted baseline files whose size might match an unhashed local addition (e.g. external move)
+	const deletedSizes = new Set<number>();
+	for (const e of entries) {
+		if (!e.local && e.prevSync && e.prevSync.hash && (e.prevSync.localSize ?? 0) > 0) {
+			deletedSizes.add(e.prevSync.localSize);
+		}
+	}
+
+	if (!hasFileRenames && !hasFolderRenames && deletedSizes.size === 0) return;
 
 	const newPaths = new Set(renamePairs.keys());
 	const folderPrefixes = hasFolderRenames
@@ -354,9 +363,11 @@ export async function enrichHashesForRenames(
 	const candidates = entries.filter(
 		(e) =>
 			e.local &&
+			!e.local.isDirectory &&
 			!e.local.hash &&
 			(newPaths.has(e.path) ||
-				folderPrefixes.some((prefix) => e.path.startsWith(prefix))),
+				folderPrefixes.some((prefix) => e.path.startsWith(prefix)) ||
+				(!e.prevSync && deletedSizes.has(e.local.size))),
 	);
 	if (candidates.length === 0) return;
 
