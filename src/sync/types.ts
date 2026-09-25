@@ -88,8 +88,18 @@ export interface RenameAction extends SyncActionBase {
 	isFolder?: boolean;
 	/** Descendant path mappings consumed by this folder rename */
 	descendants?: RenamePair[];
-	/** When true, local file content was modified during or after the move (e.g. link updates) and needs writing after remote rename */
+	/**
+	 * When true, the moved file's content also changed on the source side (e.g. a
+	 * local move whose links Obsidian rewrote, or a remote move edited on the other
+	 * device). The content is transferred to the destination right after the move.
+	 */
 	hasContentChange?: boolean;
+	/**
+	 * Folder renames only: descendant NEW paths whose content also changed on the
+	 * source side. Moved with the folder, then their content is transferred — so an
+	 * edit riding along a folder move never degrades the move to delete + re-create.
+	 */
+	changedDescendants?: string[];
 }
 
 /** A single planned action for a path */

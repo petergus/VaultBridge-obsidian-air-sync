@@ -3,6 +3,7 @@ import type { SyncAction, SyncRecord } from "./types";
 import type { SyncStateStore } from "./state";
 import type { Logger } from "../logging/logger";
 import { isMergeEligible } from "./merge";
+import type { TransferredEntities } from "./rename-content";
 
 export interface StateCommitterContext {
 	stateStore: SyncStateStore;
@@ -68,6 +69,7 @@ export async function commitAction(
 	localEntity: FileEntity | undefined,
 	remoteEntity: FileEntity | undefined,
 	ctx: StateCommitterContext,
+	transferred: readonly TransferredEntities[] = [],
 ): Promise<void> {
 	const { path } = action;
 	const { stateStore } = ctx;
@@ -90,6 +92,13 @@ export async function commitAction(
 					...action.descendants,
 					{ oldPath: action.oldPath, newPath: action.path },
 				]);
+				// Descendants whose content was transferred after the move get a fresh
+				// record (the rewrite above carried their pre-move baseline).
+				for (const t of transferred) {
+					const record = buildSyncRecord(t.localEntity, t.remoteEntity, t.path);
+					await stateStore.put(record);
+					await maybeStoreMergeBase(ctx, t.path, t.localEntity, record.localSize);
+				}
 			} else {
 				await stateStore.delete(action.oldPath);
 				const renameRecord = buildSyncRecord(localEntity, remoteEntity, path);

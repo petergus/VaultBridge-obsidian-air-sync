@@ -589,3 +589,72 @@ describe("coalesceRemoteFolderRenames", () => {
 		]);
 	});
 });
+
+describe("remote moves carry content changes and folder endpoints", () => {
+	const dir = (path: string): FileEntity => ({ path, isDirectory: true, size: 0, mtime: 0, hash: "" });
+	const md5 = (value: string) => ({ algo: "md5" as const, value });
+
+	it("flags a remote file rename whose content also changed", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "old.md",
+				action: "delete_local",
+				local: entity("old.md", "h1"),
+				baseline: { ...baseline("old.md", "h1"), remoteChecksum: md5("c1") },
+			},
+			{
+				path: "new.md",
+				action: "pull",
+				remote: { ...entity("new.md", ""), mtime: 2000, remoteChecksum: md5("c2") },
+			},
+		];
+		const result = optimizeRemoteFileRenames(actions, [{ oldPath: "old.md", newPath: "new.md" }]);
+		expect(result.actions).toEqual([
+			expect.objectContaining({ action: "rename_local", oldPath: "old.md", hasContentChange: true }),
+		]);
+	});
+
+	it("does not flag a pure remote file rename", () => {
+		const actions: SyncAction[] = [
+			{ path: "old.md", action: "delete_local", local: entity("old.md", "h1"), baseline: baseline("old.md", "h1") },
+			{ path: "new.md", action: "pull", remote: entity("new.md", "") },
+		];
+		const result = optimizeRemoteFileRenames(actions, [{ oldPath: "old.md", newPath: "new.md" }]);
+		expect(result.actions[0]).not.toHaveProperty("hasContentChange");
+	});
+
+	it("consumes the folder's own mkdir and recursive delete, listing changed descendants", () => {
+		const actions: SyncAction[] = [
+			{ path: "A", action: "delete_local", local: dir("A"), baseline: baseline("A", "") },
+			{ path: "B", action: "pull", remote: dir("B") },
+			{
+				path: "A/f1.md",
+				action: "delete_local",
+				local: entity("A/f1.md", "h1"),
+				baseline: { ...baseline("A/f1.md", "h1"), remoteChecksum: md5("c1") },
+			},
+			{ path: "B/f1.md", action: "pull", remote: { ...entity("B/f1.md", ""), remoteChecksum: md5("c1") } },
+			{
+				path: "A/f2.md",
+				action: "delete_local",
+				local: entity("A/f2.md", "h2"),
+				baseline: { ...baseline("A/f2.md", "h2"), remoteChecksum: md5("c2") },
+			},
+			{
+				path: "B/f2.md",
+				action: "pull",
+				remote: { ...entity("B/f2.md", ""), mtime: 3000, remoteChecksum: md5("edited") },
+			},
+		];
+		const result = coalesceRemoteFolderRenames(actions, [{ oldPath: "A", newPath: "B", isFolder: true }]);
+
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({
+			path: "B",
+			action: "rename_local",
+			oldPath: "A",
+			isFolder: true,
+			changedDescendants: ["B/f2.md"],
+		});
+	});
+});

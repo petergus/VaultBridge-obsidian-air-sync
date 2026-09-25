@@ -3,12 +3,15 @@ import type { Logger } from "../logging/logger";
 import {
 	optimizeLocalFileRenames,
 	coalesceLocalFolderRenames,
-	optimizeHeuristicRenames,
 } from "./optimize-local-renames";
 import {
 	optimizeRemoteFileRenames,
 	coalesceRemoteFolderRenames,
 } from "./optimize-remote-renames";
+import {
+	optimizeHeuristicRenames,
+	optimizeHeuristicRemoteRenames,
+} from "./optimize-heuristic-renames";
 
 /** Filter out consumed actions and append replacements. */
 export function replaceConsumed(
@@ -26,6 +29,9 @@ export function replaceConsumed(
  * to prove the rename is content-preserving.
  * Remote renames are processed second — they are authoritative from
  * the backend and require no hash verification.
+ * Each side then falls back to a content-hash heuristic for moves that
+ * arrived without rename information, so a move is never planned as a
+ * deletion plus a new file when the content proves it is the same file.
  */
 export function refinePlan(
 	plan: SyncPlan,
@@ -98,6 +104,10 @@ export function refinePlan(
 			).actions;
 		}
 	}
+
+	// Heuristic content-match for remote moves the backend didn't report as renames
+	// (cold full-scan reconciles, or a delta that surfaced the move as delete + add).
+	actions = optimizeHeuristicRemoteRenames(actions, logger).actions;
 
 	if (actions === plan.actions) return plan;
 	return { actions };

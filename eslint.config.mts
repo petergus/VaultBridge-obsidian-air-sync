@@ -241,9 +241,11 @@ export default tseslint.config(
 		// genuinely-separable concept (empty-dir pruning) was lifted out to
 		// prune-empty-folders.ts; what remains is cohesive execution machinery, so this
 		// is pinned just over the cap rather than fragmenting a small helper to shave
-		// the last few lines.
+		// the last few lines. Re-pinned 309 → 337: the pre-transfer compare-and-swap
+		// guards and rename-with-content-change handling grew the per-action I/O switch;
+		// the rename content transfers themselves live in rename-content.ts.
 		files: ["src/sync/plan-executor.ts"],
-		rules: { "max-lines": ["error", { max: 309, skipBlankLines: true, skipComments: true }] },
+		rules: { "max-lines": ["error", { max: 337, skipBlankLines: true, skipComments: true }] },
 	},
 	{
 		// Lint manifest.json for the words the Obsidian submission validator

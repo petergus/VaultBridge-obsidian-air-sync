@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
 	optimizeLocalFileRenames,
 	coalesceLocalFolderRenames,
-	optimizeHeuristicRenames,
 } from "./optimize-local-renames";
+import { optimizeHeuristicRenames } from "./optimize-heuristic-renames";
 import type { SyncAction, SyncRecord } from "./types";
 import type { FileEntity } from "../fs/types";
 
@@ -282,7 +282,7 @@ describe("coalesceLocalFolderRenames", () => {
 		expect(result.skipped).toHaveLength(0);
 	});
 
-	it("skips folder coalescing when a child has hash mismatch", () => {
+	it("coalesces a folder move whose child content changed, re-uploading that child", () => {
 		const actions: SyncAction[] = [
 			{
 				path: "A/f1.md",
@@ -310,10 +310,48 @@ describe("coalesceLocalFolderRenames", () => {
 			filePairs,
 		);
 
-		expect(result.actions).toHaveLength(4);
-		expect(result.remainingFileRenames.size).toBe(2);
-		expect(result.skipped).toEqual([
-			{ pair: { oldPath: "A", newPath: "B" }, reason: "hash_mismatch" },
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({
+			path: "B",
+			action: "rename_remote",
+			oldPath: "A",
+			isFolder: true,
+			changedDescendants: ["B/f2.md"],
+		});
+		expect(result.remainingFileRenames.size).toBe(0);
+		expect(result.skipped).toEqual([]);
+	});
+
+	it("consumes the folder's own mkdir and recursive delete when coalescing", () => {
+		const dir = (path: string): FileEntity => ({ path, isDirectory: true, size: 0, mtime: 0, hash: "" });
+		const actions: SyncAction[] = [
+			{ path: "A", action: "delete_remote", remote: dir("A"), baseline: baseline("A", "") },
+			{ path: "B", action: "push", local: dir("B") },
+			{
+				path: "A/f1.md",
+				action: "delete_remote",
+				remote: entity("A/f1.md", "h1"),
+				baseline: baseline("A/f1.md", "h1"),
+			},
+			{ path: "B/f1.md", action: "push", local: entity("B/f1.md", "h1") },
+		];
+		const result = coalesceLocalFolderRenames(actions, new Map([["B", "A"]]), new Map());
+
+		// Left in the plan, push(B) would occupy the destination before the move and
+		// delete_remote(A) would then recursively trash the files that should move.
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({ path: "B", action: "rename_remote", oldPath: "A", isFolder: true });
+	});
+
+	it("coalesces an empty folder move from its own endpoints", () => {
+		const dir = (path: string): FileEntity => ({ path, isDirectory: true, size: 0, mtime: 0, hash: "" });
+		const actions: SyncAction[] = [
+			{ path: "A", action: "delete_remote", remote: dir("A"), baseline: baseline("A", "") },
+			{ path: "B", action: "push", local: dir("B") },
+		];
+		const result = coalesceLocalFolderRenames(actions, new Map([["B", "A"]]), new Map());
+		expect(result.actions).toEqual([
+			expect.objectContaining({ path: "B", action: "rename_remote", oldPath: "A", descendants: [] }),
 		]);
 	});
 

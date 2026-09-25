@@ -6,6 +6,16 @@ import type {
 import type { Logger } from "../logging/logger";
 import { replaceConsumed } from "./rename-optimizer";
 import { isDotPrefixed } from "../utils/path";
+import { hasRemoteChanged } from "./change-compare";
+
+/**
+ * Did the moved file's content ALSO change on the remote (edited on the other device
+ * before or after the move)? Then the local move must be followed by a download, or
+ * the local copy keeps the old content under a baseline that claims the new one.
+ */
+function remoteContentChanged(del: SyncAction, pull: SyncAction | undefined): boolean {
+	return !!pull?.remote && !!del.baseline && hasRemoteChanged(pull.remote, del.baseline);
+}
 
 /**
  * Replace matching `delete_local(oldPath) + pull(newPath)` pairs
@@ -51,6 +61,7 @@ export function optimizeRemoteFileRenames(
 			path: newPath,
 			action: "rename_local",
 			oldPath,
+			...(remoteContentChanged(del, pull) ? { hasContentChange: true } : {}),
 			local: del.local,
 			remote: pull.remote,
 			baseline: del.baseline,
@@ -205,16 +216,36 @@ export function coalesceRemoteFolderRenames(
 			continue;
 		}
 
+		const byPath = new Map<string, SyncAction>();
+		for (const a of actions) byPath.set(a.path, a);
+
 		const descendants: RenamePair[] = [];
+		const changedDescendants: string[] = [];
 		for (const a of actions) {
 			if (a.action !== "delete_local" || !a.path.startsWith(oldPrefix))
 				continue;
 			const suffix = a.path.substring(oldPrefix.length);
 			const newPath = newPrefix + suffix;
 			descendants.push({ oldPath: a.path, newPath });
+			const pull = byPath.get(newPath);
+			if (pull?.action === "pull" && remoteContentChanged(a, pull)) {
+				changedDescendants.push(newPath);
+			}
 		}
 
-		if (descendants.length === 0) {
+		// The folder's OWN endpoint actions: `pull(newFolder)` (a mkdir) and
+		// `delete_local(oldFolder)` (a recursive delete) — folders carry sync records,
+		// so the planner emits both. They must be consumed with the move: left in, the
+		// mkdir (Phase 1) occupies the destination so the rename (Phase 3) fails
+		// "Destination already exists", and the recursive delete then trashes every
+		// file that should have moved.
+		const endpoints: string[] = [];
+		const oldEnd = byPath.get(oldFolder);
+		if (oldEnd?.action === "delete_local" && oldEnd.local?.isDirectory) endpoints.push(oldFolder);
+		const newEnd = byPath.get(newFolder);
+		if (newEnd?.action === "pull" && newEnd.remote?.isDirectory) endpoints.push(newFolder);
+
+		if (descendants.length === 0 && endpoints.length < 2) {
 			skipped.push({
 				pair: {
 					oldPath: oldFolder,
@@ -241,6 +272,7 @@ export function coalesceRemoteFolderRenames(
 			consumed.add(oldPath);
 			consumed.add(newPath);
 		}
+		for (const p of endpoints) consumed.add(p);
 
 		folderRenames.push({
 			path: newFolder,
@@ -248,6 +280,8 @@ export function coalesceRemoteFolderRenames(
 			oldPath: oldFolder,
 			isFolder: true,
 			descendants,
+			...(changedDescendants.length > 0 ? { changedDescendants } : {}),
+			...(newEnd?.remote ? { remote: newEnd.remote } : {}),
 		});
 		applied.push({
 			oldPath: oldFolder,

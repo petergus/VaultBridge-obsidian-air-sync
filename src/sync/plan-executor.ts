@@ -13,6 +13,7 @@ import type { AdaptivePoolOpts } from "../queue/async-queue";
 import { decideRetry, sleep } from "./error";
 import { pruneEmptyParentFolders } from "./prune-empty-folders";
 import { assertLocalUnchangedSincePlan, localEntityForPushedContent } from "./transfer-guards";
+import { transferRenamedContent, type TransferredEntities } from "./rename-content";
 
 export { LocalChangedDuringSyncError } from "./transfer-guards";
 
@@ -355,11 +356,14 @@ async function executeAction(
 		// rename(oldPath, …) against a source the first (successful) attempt already
 		// moved → a spurious not-found failure — so renames run without the retry wrapper.
 		const io = () => runActionIO(action, ctx);
-		const { localEntity, remoteEntity } =
+		const { localEntity, remoteEntity, transferred, partialError } =
 			ACTION_CLASS[action.action].tier === "rename"
 				? await io()
 				: await withIoRetry(io, ctx, onRateLimit);
-		await commitAction(action, localEntity, remoteEntity, ctx.committer);
+		await commitAction(action, localEntity, remoteEntity, ctx.committer, transferred);
+		// The move itself is committed; a descendant whose content failed to transfer
+		// keeps its old baseline and is re-transferred next cycle.
+		if (partialError) throw partialError;
 		result.succeeded.push({ action, localEntity, remoteEntity });
 	} catch (err) {
 		if (err instanceof AuthError) throw err;
@@ -378,7 +382,12 @@ async function executeAction(
 async function runActionIO(
 	action: SyncAction,
 	ctx: ExecutionContext,
-): Promise<{ localEntity?: FileEntity; remoteEntity?: FileEntity }> {
+): Promise<{
+	localEntity?: FileEntity;
+	remoteEntity?: FileEntity;
+	transferred?: TransferredEntities[];
+	partialError?: Error;
+}> {
 	const { localFs, remoteFs } = ctx;
 	const { path } = action;
 
@@ -418,27 +427,17 @@ async function runActionIO(
 			return { localEntity: action.local, remoteEntity: action.remote };
 		}
 
-		case "rename_remote": {
-			await remoteFs.rename(action.oldPath, path);
-			if (action.hasContentChange && !action.isFolder) {
-				const content = await localFs.read(path);
-				const plannedLocal = action.local ?? (await localFs.stat(path));
-				const mtime = plannedLocal?.mtime ?? Date.now();
-				const remoteEntity = await remoteFs.write(path, content, mtime);
-				const localEntity = plannedLocal
-					? await localEntityForPushedContent(localFs, path, content, plannedLocal)
-					: (await localFs.stat(path)) ?? undefined;
-				return { localEntity, remoteEntity };
-			}
-			const remoteEntity = await remoteFs.stat(path);
-			const localEntity = await localFs.stat(path) ?? action.local;
-			return { localEntity, remoteEntity: remoteEntity ?? undefined };
-		}
-
+		case "rename_remote":
 		case "rename_local": {
-			await localFs.rename(action.oldPath, path);
-			const localEntity = await localFs.stat(path) ?? undefined;
-			return { localEntity, remoteEntity: action.remote };
+			const toRemote = action.action === "rename_remote";
+			await (toRemote ? remoteFs : localFs).rename(action.oldPath, path);
+			// A move whose content also changed transfers that content right after it.
+			const { transferred, error } = await transferRenamedContent(action, localFs, remoteFs);
+			const moved = !action.isFolder ? transferred[0] : undefined;
+			if (moved) return { localEntity: moved.localEntity, remoteEntity: moved.remoteEntity };
+			const localEntity = await localFs.stat(path) ?? (toRemote ? action.local : undefined);
+			const remoteEntity = toRemote ? (await remoteFs.stat(path)) ?? undefined : action.remote;
+			return { localEntity, remoteEntity, transferred, partialError: error };
 		}
 
 		case "delete_remote": {

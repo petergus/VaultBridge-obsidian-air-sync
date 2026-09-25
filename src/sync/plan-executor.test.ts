@@ -300,6 +300,125 @@ describe("executePlan", () => {
 		});
 	});
 
+	describe("renames carrying content changes", () => {
+		function seedFolder(ctx: ExecutionContext, side: "local" | "remote", folder: string) {
+			const fs = (side === "local" ? ctx.localFs : ctx.remoteFs) as ReturnType<typeof createMockFs>;
+			addFile(fs, `${folder}/f1.md`, "content1");
+			addFile(fs, `${folder}/f2.md`, "content2");
+			const stateStore = ctx.committer.stateStore as unknown as ReturnType<typeof createMockStateStore>;
+			for (const name of ["f1.md", "f2.md"]) {
+				stateStore.records.set(`A/${name}`, {
+					path: `A/${name}`, hash: "old", localMtime: 1000, remoteMtime: 1000,
+					localSize: 8, remoteSize: 8, syncedAt: 900,
+				});
+			}
+			return stateStore;
+		}
+
+		it("folder rename_remote uploads changed descendants after the move", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+			const stateStore = seedFolder(ctx, "remote", "A");
+			addFile(localFs, "B/f1.md", "content1");
+			addFile(localFs, "B/f2.md", "rewritten links", 2000);
+
+			const result = await executePlan(makePlan([{
+				path: "B",
+				action: "rename_remote",
+				oldPath: "A",
+				isFolder: true,
+				descendants: [
+					{ oldPath: "A/f1.md", newPath: "B/f1.md" },
+					{ oldPath: "A/f2.md", newPath: "B/f2.md" },
+				],
+				changedDescendants: ["B/f2.md"],
+			}]), ctx);
+
+			expect(result.failed).toHaveLength(0);
+			expect(readText(remoteFs, "B/f1.md")).toBe("content1");
+			expect(readText(remoteFs, "B/f2.md")).toBe("rewritten links");
+			expect(remoteFs.files.has("A/f2.md")).toBe(false);
+			// The re-uploaded descendant gets a fresh baseline; the pure move keeps its own.
+			expect(stateStore.records.get("B/f2.md")).toMatchObject({ localMtime: 2000, localSize: 15 });
+			expect(stateStore.records.get("B/f1.md")).toMatchObject({ hash: "old" });
+		});
+
+		it("folder rename_local downloads changed descendants after the move", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+			const stateStore = seedFolder(ctx, "local", "A");
+			addFile(remoteFs, "B/f1.md", "content1");
+			addFile(remoteFs, "B/f2.md", "edited remotely", 3000);
+
+			const result = await executePlan(makePlan([{
+				path: "B",
+				action: "rename_local",
+				oldPath: "A",
+				isFolder: true,
+				descendants: [
+					{ oldPath: "A/f1.md", newPath: "B/f1.md" },
+					{ oldPath: "A/f2.md", newPath: "B/f2.md" },
+				],
+				changedDescendants: ["B/f2.md"],
+			}]), ctx);
+
+			expect(result.failed).toHaveLength(0);
+			expect(readText(localFs, "B/f1.md")).toBe("content1");
+			expect(readText(localFs, "B/f2.md")).toBe("edited remotely");
+			expect(stateStore.records.get("B/f2.md")).toMatchObject({ remoteMtime: 3000 });
+		});
+
+		it("commits the folder move even when a changed descendant fails to transfer", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+			const stateStore = seedFolder(ctx, "remote", "A");
+			addFile(localFs, "B/f1.md", "content1");
+			addFile(localFs, "B/f2.md", "rewritten links", 2000);
+			vi.spyOn(remoteFs, "write").mockRejectedValue(new Error("upload failed"));
+
+			const result = await executePlan(makePlan([{
+				path: "B",
+				action: "rename_remote",
+				oldPath: "A",
+				isFolder: true,
+				descendants: [
+					{ oldPath: "A/f1.md", newPath: "B/f1.md" },
+					{ oldPath: "A/f2.md", newPath: "B/f2.md" },
+				],
+				changedDescendants: ["B/f2.md"],
+			}]), ctx);
+
+			expect(result.failed).toHaveLength(1);
+			expect(remoteFs.files.has("B/f2.md")).toBe(true);
+			// The move is recorded; the failed descendant keeps its pre-move baseline so
+			// the next cycle sees it as locally changed and uploads it then.
+			expect(stateStore.records.has("A/f2.md")).toBe(false);
+			expect(stateStore.records.get("B/f2.md")).toMatchObject({ hash: "old" });
+		});
+
+		it("file rename_local with hasContentChange downloads the new content", async () => {
+			const ctx = makeCtx();
+			const localFs = ctx.localFs as ReturnType<typeof createMockFs>;
+			const remoteFs = ctx.remoteFs as ReturnType<typeof createMockFs>;
+			addFile(localFs, "old.md", "old content");
+			addFile(remoteFs, "new.md", "new remote content", 4000);
+
+			const result = await executePlan(makePlan([{
+				path: "new.md",
+				action: "rename_local",
+				oldPath: "old.md",
+				hasContentChange: true,
+			}]), ctx);
+
+			expect(result.failed).toHaveLength(0);
+			expect(localFs.files.has("old.md")).toBe(false);
+			expect(readText(localFs, "new.md")).toBe("new remote content");
+		});
+	});
+
 	describe("cleanup", () => {
 		it("removes state record without file I/O", async () => {
 			const ctx = makeCtx();
