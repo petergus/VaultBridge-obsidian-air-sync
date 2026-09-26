@@ -151,3 +151,14 @@ export function decideRetry(
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
+
+/**
+ * Whether an error means the remote item is gone: an HTTP 404, or a backend error
+ * whose message says "not found". Used to evict a ghost entry from the metadata cache.
+ */
+export function isNotFoundError(err: unknown): boolean {
+	if (err && typeof err === "object" && "status" in err && (err as { status: unknown }).status === 404) {
+		return true;
+	}
+	return err instanceof Error && err.message.toLowerCase().includes("not found");
+}

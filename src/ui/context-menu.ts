@@ -1,195 +1,36 @@
-import type { App, EventRef, MarkdownFileInfo, MarkdownView, MenuItem, TAbstractFile } from "obsidian";
-import { Menu, Notice } from "obsidian";
-import type { BackendManager } from "../fs/backend-manager";
-import type { SyncOrchestrator } from "../sync/orchestrator";
-import { DirectDeleteConfirmModal } from "./deletion-modal";
+import type { App, EventRef, MarkdownFileInfo, MarkdownView, MenuPositionDef, TAbstractFile } from "obsidian";
+import { Menu } from "obsidian";
+import { hookNormalDeleteItem, registerTrashFileHook } from "./delete-hooks";
+import {
+	canOpenInRemote,
+	hasOpenItem,
+	markOpenItemAdded,
+	setupMenuItem,
+	setupMultiMenuItem,
+	type ContextMenuDeps,
+} from "./menu-items";
+import { createNotebookNavigatorHook } from "./notebook-navigator-menu";
 
-export interface ContextMenuDeps {
-	app: App;
-	backendManager: BackendManager;
-	orchestrator?: SyncOrchestrator;
-	registerEvent?: (ref: EventRef) => void;
-	registerDomEvent?: (
-		el: Window | Document | HTMLElement,
-		type: string,
-		callback: (evt: any) => any,
-		options?: boolean | AddEventListenerOptions,
-	) => void;
-	registerCleanup?: (cb: () => void) => void;
+export type { ContextMenuDeps } from "./menu-items";
+
+/** How recent a right-click must be for a position-shown menu to be treated as its menu. */
+const CONTEXT_MENU_FRESH_MS = 1000;
+
+/** The DOM surface `resolveFileFromElement` needs — duck-typed so any element-like target works. */
+interface ClosestCapable {
+	closest(selector: string): { getAttribute(name: string): string | null } | null;
 }
 
-function getCleanDisplayName(rawName: string): string {
-	const lower = rawName.toLowerCase();
-	if (lower.includes("google drive")) return "Google Drive";
-	if (lower.includes("onedrive")) return "OneDrive";
-	if (lower.includes("dropbox")) return "Dropbox";
-	return rawName;
+function isClosestCapable(el: unknown): el is ClosestCapable {
+	return !!el && typeof (el as Partial<ClosestCapable>).closest === "function";
 }
 
-export function setupMenuItem(
-	item: MenuItem,
-	file: TAbstractFile,
-	deps: ContextMenuDeps,
-): void {
-	const provider = deps.backendManager.getBackendProvider();
-	if (!provider) return;
-
-	const remoteFs = deps.backendManager.getRemoteFs();
-	if (!remoteFs?.getWebUrl) return;
-
-	const displayName = getCleanDisplayName(provider.displayName);
-	const name = file.name || deps.app.vault.getName() || "Vault root";
-
-	item
-		.setTitle(`Open in ${displayName}`)
-		.setIcon("external-link")
-		.onClick(async () => {
-			try {
-				const currentFs = deps.backendManager.getRemoteFs();
-				const url = await currentFs?.getWebUrl?.(file.path);
-				if (url) {
-					window.open(url);
-				} else {
-					new Notice(`"${name}" is not yet synced to ${displayName}`);
-				}
-			} catch {
-				new Notice(`Failed to open "${name}" in ${displayName}`);
-			}
-		});
-}
-
-export function hookNormalDeleteItem(
-	menu: Menu,
-	file: TAbstractFile,
-	deps: ContextMenuDeps,
-): void {
-	if (!deps.orchestrator) return;
-	const provider = deps.backendManager.getBackendProvider();
-	if (!provider) return;
-	const remoteFs = deps.backendManager.getRemoteFs();
-	if (!remoteFs) return;
-	if (!file || !file.path || file.path === "/" || file.path === "") return;
-
-	const displayName = getCleanDisplayName(provider.displayName);
-
-	const tryHookItem = (item: any) => {
-		if (!item || item.__vaultbridge_hooked) return false;
-		const title = (item.title || item.titleEl?.textContent || "").toLowerCase();
-		const icon = (item.icon || "").toLowerCase();
-		if (title.includes("delete") || icon.includes("trash")) {
-			item.__vaultbridge_hooked = true;
-			item.onClick(() => {
-				new DirectDeleteConfirmModal(deps.app, file, {
-					remoteFs,
-					orchestrator: deps.orchestrator,
-					displayName,
-				}).open();
-			});
-			return true;
-		}
-		return false;
-	};
-
-	const items = (menu as any).items as any[] | undefined;
-	if (Array.isArray(items)) {
-		for (const it of items) {
-			tryHookItem(it);
-		}
-	}
-
-	if (!(menu as any).__vaultbridge_add_item_wrapped) {
-		(menu as any).__vaultbridge_add_item_wrapped = true;
-		const origAddItem = menu.addItem.bind(menu);
-		menu.addItem = function (cb: (item: MenuItem) => any) {
-			return origAddItem((item: MenuItem) => {
-				cb(item);
-				tryHookItem(item);
-			});
-		};
-	}
-}
-
-export function registerTrashFileHook(deps: ContextMenuDeps): () => void {
-	const fileManager = deps.app.fileManager;
-	if (!fileManager || typeof fileManager.trashFile !== "function") {
-		return () => {};
-	}
-
-	const originalTrashFile = fileManager.trashFile.bind(fileManager);
-
-	fileManager.trashFile = async (file: TAbstractFile) => {
-		if ((deps.app as any).__vaultbridge_suppress_trash_modal) {
-			return originalTrashFile(file);
-		}
-
-		const provider = deps.backendManager.getBackendProvider();
-		const remoteFs = deps.backendManager.getRemoteFs();
-		if (
-			!provider ||
-			!remoteFs ||
-			!deps.orchestrator ||
-			!file?.path ||
-			file.path === "/" ||
-			file.path === ""
-		) {
-			return originalTrashFile(file);
-		}
-
-		const displayName = getCleanDisplayName(provider.displayName);
-
-		return new Promise<void>((resolve) => {
-			new DirectDeleteConfirmModal(deps.app, file, {
-				remoteFs,
-				orchestrator: deps.orchestrator,
-				displayName,
-				onDeleted: () => resolve(),
-			}).open();
-		});
-	};
-
-	return () => {
-		fileManager.trashFile = originalTrashFile;
-	};
-}
-
-export function setupMultiMenuItem(
-	item: MenuItem,
-	files: readonly TAbstractFile[],
-	deps: ContextMenuDeps,
-): void {
-	const provider = deps.backendManager.getBackendProvider();
-	if (!provider) return;
-
-	const remoteFs = deps.backendManager.getRemoteFs();
-	if (!remoteFs?.getWebUrl) return;
-
-	const displayName = getCleanDisplayName(provider.displayName);
-
-	item
-		.setTitle(`Open ${files.length} items in ${displayName}`)
-		.setIcon("external-link")
-		.onClick(async () => {
-			let openedCount = 0;
-			for (const file of files) {
-				try {
-					const currentFs = deps.backendManager.getRemoteFs();
-					const url = await currentFs?.getWebUrl?.(file.path);
-					if (url) {
-						window.open(url);
-						openedCount++;
-					}
-				} catch {
-					// Ignore individual failure in multi-open
-				}
-			}
-			if (openedCount === 0 && files.length > 0) {
-				new Notice(`Selected items are not yet synced to ${displayName}`);
-			}
-		});
-}
-
-function resolveFileFromElement(el: any, app: App): TAbstractFile | null {
-	if (!el || typeof el.closest !== "function") return null;
+/**
+ * Resolve the vault file a right-clicked element stands for, via the nearest
+ * `data-path` (core explorer, Notebook Navigator, and most file-list plugins set it).
+ */
+function resolveFileFromElement(el: unknown, app: App): TAbstractFile | null {
+	if (!isClosestCapable(el)) return null;
 	const matchEl = el.closest(
 		".nn-file[data-path], .nn-folder[data-path], .nn-navitem[data-path], .nav-file, .nav-folder, [data-path]",
 	);
@@ -204,10 +45,20 @@ function resolveFileFromElement(el: any, app: App): TAbstractFile | null {
 	return app.vault.getAbstractFileByPath(path);
 }
 
+/** Add the "Open in <backend>" item for `file` to `menu`, once. */
+function addOpenItemOnce(menu: Menu, file: TAbstractFile, deps: ContextMenuDeps, withSeparator = false): void {
+	if (hasOpenItem(menu) || !canOpenInRemote(deps)) return;
+	markOpenItemAdded(menu);
+	if (withSeparator) menu.addSeparator();
+	menu.addItem((item) => {
+		setupMenuItem(item, file, deps);
+	});
+}
+
 /**
- * Register file-menu, files-menu, and editor-menu handlers to add "Open in <Backend>"
- * and "Delete from Vault & <Backend>..." items.
- * Also hooks Notebook Navigator API and Menu.prototype for full compatibility.
+ * Register file-menu, files-menu, and editor-menu handlers that add "Open in <Backend>"
+ * and route the normal "Delete" through the vault-and-cloud confirmation.
+ * Also hooks Notebook Navigator's menu API and Menu.prototype for full compatibility.
  */
 export function registerContextMenuHandlers(
 	deps: ContextMenuDeps,
@@ -218,22 +69,8 @@ export function registerContextMenuHandlers(
 
 	const addSingleItemToMenu = (menu: Menu, file: TAbstractFile) => {
 		if (!file) return;
-
 		hookNormalDeleteItem(menu, file, deps);
-
-		if ((menu as any).__vaultbridge_context_menu_added) return;
-
-		const provider = deps.backendManager.getBackendProvider();
-		if (!provider) return;
-
-		const remoteFs = deps.backendManager.getRemoteFs();
-		if (!remoteFs?.getWebUrl) return;
-
-		(menu as any).__vaultbridge_context_menu_added = true;
-
-		menu.addItem((item) => {
-			setupMenuItem(item, file, deps);
-		});
+		addOpenItemOnce(menu, file, deps);
 	};
 
 	// 1. Right-click in File Explorer or tab headers (Obsidian core event)
@@ -247,17 +84,12 @@ export function registerContextMenuHandlers(
 	registerEvent(
 		deps.app.workspace.on("files-menu", (menu: Menu, files: TAbstractFile[]) => {
 			if (!files || files.length === 0) return;
-			if ((menu as any).__vaultbridge_context_menu_added) return;
+			if (hasOpenItem(menu)) return;
 
 			if (files.length === 1 && files[0]) {
 				addSingleItemToMenu(menu, files[0]);
-			} else if (files.length > 1) {
-				const provider = deps.backendManager.getBackendProvider();
-				if (!provider) return;
-				const remoteFs = deps.backendManager.getRemoteFs();
-				if (!remoteFs?.getWebUrl) return;
-
-				(menu as any).__vaultbridge_context_menu_added = true;
+			} else if (files.length > 1 && canOpenInRemote(deps)) {
+				markOpenItemAdded(menu);
 				menu.addItem((item) => {
 					setupMultiMenuItem(item, files, deps);
 				});
@@ -274,68 +106,15 @@ export function registerContextMenuHandlers(
 		}),
 	);
 
-	// 4. Hook Notebook Navigator Official Extension API if installed
-	const hookNotebookNavigator = () => {
-		const nnPlugin = (deps.app as any).plugins?.plugins?.["notebook-navigator"];
-		if (!nnPlugin?.api?.menus) return;
-		if ((nnPlugin as any).__vaultbridge_nn_hooked) return;
-		(nnPlugin as any).__vaultbridge_nn_hooked = true;
-
-		if (typeof nnPlugin.api.menus.registerFileMenu === "function") {
-			const unregFile = nnPlugin.api.menus.registerFileMenu(
-				({ addItem, file, selection }: any) => {
-					if (!file) return;
-					if (selection?.mode === "multiple" && selection?.files?.length > 1) {
-						addItem((item: MenuItem) => {
-							if ((item as any).menu) {
-								(item as any).menu.__vaultbridge_context_menu_added = true;
-							}
-							setupMultiMenuItem(item, selection.files, deps);
-						});
-					} else {
-						if (deps.backendManager.getRemoteFs()?.getWebUrl) {
-							addItem((item: MenuItem) => {
-								if ((item as any).menu) {
-									(item as any).menu.__vaultbridge_context_menu_added = true;
-								}
-								setupMenuItem(item, file, deps);
-							});
-						}
-					}
-				},
-			);
-			if (typeof unregFile === "function" && deps.registerCleanup) {
-				deps.registerCleanup(unregFile);
-			}
-		}
-
-		if (typeof nnPlugin.api.menus.registerFolderMenu === "function") {
-			const unregFolder = nnPlugin.api.menus.registerFolderMenu(
-				({ addItem, folder }: any) => {
-					if (!folder) return;
-					if (deps.backendManager.getRemoteFs()?.getWebUrl) {
-						addItem((item: MenuItem) => {
-							if ((item as any).menu) {
-								(item as any).menu.__vaultbridge_context_menu_added = true;
-							}
-							setupMenuItem(item, folder, deps);
-						});
-					}
-				},
-			);
-			if (typeof unregFolder === "function" && deps.registerCleanup) {
-				deps.registerCleanup(unregFolder);
-			}
-		}
-	};
-
+	// 4. Hook Notebook Navigator's menu extension API if installed (now, and once it loads)
+	const hookNotebookNavigator = createNotebookNavigatorHook(deps);
 	hookNotebookNavigator();
 	deps.app.workspace.onLayoutReady(() => {
 		hookNotebookNavigator();
 	});
 
 	// 5. Track last right-clicked DOM element for context menus that don't trigger events
-	let lastContextMenuTarget: HTMLElement | null = null;
+	let lastContextMenuTarget: EventTarget | null = null;
 	let lastContextMenuTime = 0;
 
 	if (typeof window !== "undefined" && deps.registerDomEvent) {
@@ -343,7 +122,7 @@ export function registerContextMenuHandlers(
 			window,
 			"contextmenu",
 			(evt: MouseEvent) => {
-				lastContextMenuTarget = (evt?.target as any) ?? null;
+				lastContextMenuTarget = evt?.target ?? null;
 				lastContextMenuTime = Date.now();
 			},
 			true,
@@ -351,30 +130,18 @@ export function registerContextMenuHandlers(
 	}
 
 	// 6. Monkeypatch Menu.prototype.showAtMouseEvent and showAtPosition as a universal fallback
-	const origShowAtMouseEvent = Menu.prototype.showAtMouseEvent;
-	const origShowAtPosition = Menu.prototype.showAtPosition;
+	// The originals are held unbound on purpose: each is restored onto the prototype at
+	// cleanup and re-invoked with `.call(this, …)` below, so `this` is always the menu.
+	const origShowAtMouseEvent = Menu.prototype.showAtMouseEvent; // eslint-disable-line @typescript-eslint/unbound-method -- restored at cleanup, invoked via .call(this)
+	const origShowAtPosition = Menu.prototype.showAtPosition; // eslint-disable-line @typescript-eslint/unbound-method -- restored at cleanup, invoked via .call(this)
 
-	Menu.prototype.showAtMouseEvent = function (evt: MouseEvent) {
+	Menu.prototype.showAtMouseEvent = function (this: Menu, evt: MouseEvent) {
 		try {
 			hookNotebookNavigator();
-			const target = (evt?.target as any) || lastContextMenuTarget;
-			const file = resolveFileFromElement(target, deps.app);
+			const file = resolveFileFromElement(evt?.target ?? lastContextMenuTarget, deps.app);
 			if (file) {
 				hookNormalDeleteItem(this, file, deps);
-			}
-
-			if (!(this as any).__vaultbridge_context_menu_added) {
-				const provider = deps.backendManager.getBackendProvider();
-				const remoteFs = deps.backendManager.getRemoteFs();
-				if (provider && remoteFs && remoteFs.getWebUrl) {
-					if (file) {
-						(this as any).__vaultbridge_context_menu_added = true;
-						this.addSeparator();
-						this.addItem((item) => {
-							setupMenuItem(item, file, deps);
-						});
-					}
-				}
+				addOpenItemOnce(this, file, deps, true);
 			}
 		} catch (err) {
 			console.error("[VaultBridge] Error in context menu hook:", err);
@@ -382,26 +149,13 @@ export function registerContextMenuHandlers(
 		return origShowAtMouseEvent.call(this, evt);
 	};
 
-	Menu.prototype.showAtPosition = function (pos: any, doc?: Document) {
+	Menu.prototype.showAtPosition = function (this: Menu, pos: MenuPositionDef, doc?: Document) {
 		try {
 			hookNotebookNavigator();
 			const file = resolveFileFromElement(lastContextMenuTarget, deps.app);
-			if (file && Date.now() - lastContextMenuTime < 1000) {
+			if (file && Date.now() - lastContextMenuTime < CONTEXT_MENU_FRESH_MS) {
 				hookNormalDeleteItem(this, file, deps);
-			}
-
-			if (!(this as any).__vaultbridge_context_menu_added && Date.now() - lastContextMenuTime < 1000) {
-				const provider = deps.backendManager.getBackendProvider();
-				const remoteFs = deps.backendManager.getRemoteFs();
-				if (provider && remoteFs && remoteFs.getWebUrl) {
-					if (file) {
-						(this as any).__vaultbridge_context_menu_added = true;
-						this.addSeparator();
-						this.addItem((item) => {
-							setupMenuItem(item, file, deps);
-						});
-					}
-				}
+				addOpenItemOnce(this, file, deps, true);
 			}
 		} catch (err) {
 			console.error("[VaultBridge] Error in showAtPosition hook:", err);

@@ -12,7 +12,7 @@ import type { SyncStateStore } from "./state";
 import type { MixedEntity, SyncRecord } from "./types";
 import type { FileEntity } from "../fs/types";
 import { sha256 } from "../utils/hash";
-import { enforceDeletionLimit, MassDeletionBlockedError } from "./deletion-guard";
+import { splitPlanAtLimit } from "./deletion-guard";
 
 /**
  * Delete-safety contracts.
@@ -95,41 +95,40 @@ describe("§2-1 (fixed): a lone deletion is no longer silently aborted", () => {
 
 describe("configurable mass-deletion guard", () => {
 	it("allows a plan at the configured limit", () => {
-		expect(() => enforceDeletionLimit({
+		const split = splitPlanAtLimit({
 			actions: [
 				{ path: "local.md", action: "delete_local" },
 				{ path: "remote.md", action: "delete_remote" },
 			],
-		}, 2)).not.toThrow();
+		}, 2);
+		expect(split.hasHeld).toBe(false);
+		expect(split.safe.actions).toHaveLength(2);
 	});
 
-	it("blocks the complete plan above the limit with a directional breakdown", () => {
-		try {
-			enforceDeletionLimit({
-				actions: [
-					{ path: "a.md", action: "delete_local" },
-					{ path: "b.md", action: "delete_local" },
-					{ path: "c.md", action: "delete_remote" },
-					{ path: "new.md", action: "push" },
-				],
-			}, 2);
-			expect.fail("Expected the deletion guard to block the plan");
-		} catch (err) {
-			expect(err).toBeInstanceOf(MassDeletionBlockedError);
-			const blocked = err as MassDeletionBlockedError;
-			expect(blocked.counts).toEqual({ local: 2, remote: 1, total: 3 });
-			expect(blocked.limit).toBe(2);
-		}
+	it("holds every deletion above the limit, in both directions, and runs the rest", () => {
+		const split = splitPlanAtLimit({
+			actions: [
+				{ path: "a.md", action: "delete_local" },
+				{ path: "b.md", action: "delete_local" },
+				{ path: "c.md", action: "delete_remote" },
+				{ path: "new.md", action: "push" },
+			],
+		}, 2);
+		expect(split.hasHeld).toBe(true);
+		expect(split.held.map((a) => a.path)).toEqual(["a.md", "b.md", "c.md"]);
+		expect(split.safe.actions).toEqual([{ path: "new.md", action: "push" }]);
 	});
 
 	it("does not count renames or cleanup, and 0 disables the guard", () => {
-		expect(() => enforceDeletionLimit({
+		const split = splitPlanAtLimit({
 			actions: [
 				{ path: "new.md", oldPath: "old.md", action: "rename_local" },
 				{ path: "stale.md", action: "cleanup" },
 				{ path: "gone.md", action: "delete_remote" },
 			],
-		}, 0)).not.toThrow();
+		}, 0);
+		expect(split.hasHeld).toBe(false);
+		expect(split.safe.actions).toHaveLength(3);
 	});
 });
 

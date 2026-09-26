@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { spyRequestUrl, mockRes, createMockSecretStore } from "./test-helpers";
 import { FOLDER_MIME } from "./types";
+import type { GoogleDriveBackendData } from "./provider";
 import type { VaultBridgeSettings } from "../../settings";
 import type { IBackendProvider } from "../backend";
 import { Platform } from "obsidian";
@@ -372,8 +373,8 @@ describe("GoogleDriveProvider.getRemoteVaultDisplayPath", () => {
 	it("readBackendState skips re-storing tokens if secretStore has been cleared (disconnected)", async () => {
 		const { provider, store } = await makeProvider(CONNECTED);
 		// Simulate auth having in-memory tokens
-		provider.auth.getOrCreateGoogleAuth(settingsWith().backendData as any);
-		(provider.auth as any).googleAuth.setTokens("RT-stale", "AT-stale", 123456);
+		const auth = provider.auth.getOrCreateGoogleAuth(settingsWith().backendData as unknown as GoogleDriveBackendData);
+		auth.setTokens("RT-stale", "AT-stale", 123456);
 
 		// Clear secrets as disconnect would do
 		store.setSecret("air-sync-googledrive-refresh-token", "");

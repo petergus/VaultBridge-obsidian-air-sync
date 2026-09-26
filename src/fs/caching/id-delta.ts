@@ -100,3 +100,36 @@ function applyEntry<TFile>(
 		}
 	}
 }
+
+/**
+ * Compute a remote delta by diffing a pre-scan path-by-id snapshot against the
+ * freshly-scanned cache (the cursor-expiry full-scan fallback). Keys on backend id, so
+ * it detects adds/deletes/renames but NOT in-place content edits (same path+id); those
+ * are caught by the next incremental sync or WARM mode's local-vs-record check.
+ */
+export function diffCacheById<TFile>(
+	cache: AbstractMetadataCache<TFile>,
+	oldPathById: ReadonlyMap<string, string>,
+): { modified: string[]; deleted: string[]; renamed: RenamePair[] } {
+	const modified: string[] = [];
+	const deleted: string[] = [];
+	const renamed: RenamePair[] = [];
+	const newIds = new Set<string>();
+	for (const [newPath] of cache.entries()) {
+		const id = cache.idAt(newPath);
+		if (id === undefined) continue;
+		newIds.add(id);
+		const oldPath = oldPathById.get(id);
+		if (!oldPath) {
+			modified.push(newPath);
+		} else if (oldPath !== newPath) {
+			renamed.push({ oldPath, newPath, isFolder: cache.isFolder(newPath) || undefined });
+			modified.push(newPath);
+			deleted.push(oldPath);
+		}
+	}
+	for (const [id, oldPath] of oldPathById) {
+		if (!newIds.has(id)) deleted.push(oldPath);
+	}
+	return { modified, deleted, renamed };
+}

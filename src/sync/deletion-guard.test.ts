@@ -39,7 +39,7 @@ describe("enforceListingCompleteness", () => {
 	it("throws SuspiciousListingError for a sparse local listing", () => {
 		// 20 baseline, threshold=10; local=9 < 10
 		expect(() => enforceListingCompleteness(9, 20, 20))
-			.toThrowError(SuspiciousListingError);
+			.toThrow(SuspiciousListingError);
 	});
 
 	it("names the correct side when local is sparse", () => {
@@ -55,7 +55,7 @@ describe("enforceListingCompleteness", () => {
 
 	it("throws SuspiciousListingError for a sparse remote listing", () => {
 		expect(() => enforceListingCompleteness(20, 4, 20))
-			.toThrowError(SuspiciousListingError);
+			.toThrow(SuspiciousListingError);
 	});
 
 	it("names the correct side when remote is sparse", () => {

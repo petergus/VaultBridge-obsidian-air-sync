@@ -1,10 +1,11 @@
-import { App, Notice, Platform, PluginSettingTab, Setting, TFile } from "obsidian";
+import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import type VaultBridgePlugin from "../main";
 import type { ConflictStrategy } from "../sync/types";
 import { getAllBackendProviders, getBackendProvider } from "../fs/registry";
 import { getBackendSettingsRenderer } from "./backend-settings";
 import { parseLines } from "../utils/parse-lines";
 import { renderConfigSyncSettings } from "./config-sync-settings";
+import { renderConflictsAlert, renderHeldDeletionsAlert } from "./settings-alerts";
 
 export class VaultBridgeSettingTab extends PluginSettingTab {
 	plugin: VaultBridgePlugin;
@@ -34,73 +35,8 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		// Active conflicts panel
-		const conflictsContainer = containerEl.createDiv("sync-conflicts-settings-container");
-		void this.plugin.conflictTracker.getTrackedPaths().then((paths) => {
-			if (paths.size > 0) {
-				conflictsContainer.empty();
-				
-				const alertEl = conflictsContainer.createDiv("sync-conflicts-alert-box");
-
-				new Setting(alertEl)
-					.setName("Active sync conflicts")
-					.setDesc("Open these files to resolve their conflicts (the remote version is inside a callout).")
-					.setHeading();
-
-				const listEl = alertEl.createEl("ul");
-				for (const path of Array.from(paths).sort()) {
-					const li = listEl.createEl("li");
-					const link = li.createEl("a");
-					link.setText(path);
-					this.plugin.registerDomEvent(link, "click", (e) => {
-						e.preventDefault();
-						const file = this.app.vault.getAbstractFileByPath(path);
-						if (file && file instanceof TFile) {
-							void this.app.workspace.getLeaf().openFile(file);
-							(this.app as unknown as { setting: { close: () => void } }).setting?.close();
-						}
-					});
-				}
-			}
-		});
-
-		// Held deletions panel
-		const pendingDeletions = this.plugin.orchestrator?.getPendingDeletions() ?? [];
-		if (pendingDeletions.length > 0) {
-			const serverCount = pendingDeletions.filter((a) => a.action === "delete_remote").length;
-			const localCount = pendingDeletions.filter((a) => a.action === "delete_local").length;
-			const deletionsContainer = containerEl.createDiv("sync-deletions-settings-container");
-			const alertEl = deletionsContainer.createDiv("sync-deletions-alert-box");
-
-			const desc = serverCount > 0 && localCount > 0
-				? `${pendingDeletions.length} deletions held for safety (${serverCount} server, ${localCount} local). Review before applying.`
-				: serverCount > 0
-				? `${serverCount} server deletion${serverCount === 1 ? "" : "s"} held for safety. Review before removing from cloud storage.`
-				: `${localCount} local deletion${localCount === 1 ? "" : "s"} held for safety. Review before removing from this device.`;
-
-			new Setting(alertEl)
-				.setName("Held deletions awaiting review")
-				.setDesc(desc)
-				.setHeading()
-				.addButton((btn) => {
-					btn
-						.setButtonText("Review deletions")
-						.setCta()
-						.onClick(() => {
-							this.plugin.openDeletionReviewModal();
-						});
-				})
-				.addButton((btn) => {
-					btn
-						.setButtonText("Approve all")
-						.setWarning()
-						.onClick(async () => {
-							new Notice(`Applying ${pendingDeletions.length} held deletions...`);
-							await this.plugin.orchestrator.approvePendingDeletions();
-							this.renderContent();
-						});
-				});
-		}
+		renderConflictsAlert(containerEl, this.plugin);
+		renderHeldDeletionsAlert(containerEl, this.plugin, () => this.renderContent());
 
 		new Setting(containerEl).setName("Sync").setHeading();
 

@@ -73,15 +73,49 @@ export function getEffectiveSyncDotPaths(settings: VaultBridgeSettings, configDi
 		: settings.syncDotPaths;
 }
 
-/** ignorePatterns, with the built-in config-sync patterns prepended when enabled. */
+/**
+ * Config-directory subtrees that are always regenerable and never worth remote
+ * quota, applied whether or not config sync is on (a config dir opted into
+ * `syncDotPaths` by hand is covered too). Built from `configDir` — it is
+ * user-configurable, so these can't live in the stored default `ignorePatterns`.
+ *
+ * - `<configDir>/icons/**` — icon-pack SVGs (Iconize, Simple Icons, …): thousands
+ *   of files, often 50+ MB, rebuilt from the plugin registry on reinstall. Dropped
+ *   when the user turns on "Sync icons", so that toggle actually takes effect.
+ * - `<configDir>/themes/.../.git/**` — theme repos checked out with git. Dev
+ *   artifacts with no value in a sync target; also filled Dropbox quota once.
+ */
+export function getBuiltInIgnorePatterns(settings: VaultBridgeSettings, configDir: string): string[] {
+	const dir = escapeGlobChars(configDir);
+	return [
+		...(settings.syncConfigIcons ? [] : [`${dir}/icons/**`]),
+		`${dir}/themes/**/.git/**`,
+	];
+}
+
+/**
+ * The automatic patterns, in order: the config-sync patterns (when enabled), then
+ * the built-in regenerable-subtree exclusions. They precede the user's own
+ * `ignorePatterns`, so a user `!pattern` can still re-include anything they cover.
+ */
+export function getInjectedIgnorePatterns(
+	settings: VaultBridgeSettings,
+	configDir: string,
+	pluginId: string,
+): string[] {
+	return [
+		...(settings.enableConfigSync ? getConfigSyncIgnorePatterns(settings, configDir, pluginId) : []),
+		...getBuiltInIgnorePatterns(settings, configDir),
+	];
+}
+
+/** ignorePatterns, with the injected automatic patterns prepended. */
 export function getEffectiveIgnorePatterns(
 	settings: VaultBridgeSettings,
 	configDir: string,
 	pluginId: string,
 ): string[] {
-	return settings.enableConfigSync
-		? [...getConfigSyncIgnorePatterns(settings, configDir, pluginId), ...settings.ignorePatterns]
-		: settings.ignorePatterns;
+	return [...getInjectedIgnorePatterns(settings, configDir, pluginId), ...settings.ignorePatterns];
 }
 
 /**

@@ -3,174 +3,29 @@ import type { IFileSystem } from "../fs/interface";
 import type { IBackendProvider } from "../fs/backend";
 import type { Logger } from "../logging/logger";
 import { AsyncMutex } from "../queue/async-queue";
-import { isIgnored, isSystemJunkFile } from "../utils/ignore";
-import { isDotPathOutOfScope } from "../utils/path";
-import { getEffectiveIgnorePatterns, getEffectiveSyncDotPaths, isOwnPluginDataPath } from "../config-sync";
 import { computeScopeFingerprint } from "./scope-fingerprint";
-import { INTERNAL_METADATA_PATH } from "../fs/remote-vault-contract";
+import { isExcludedFromSync } from "./sync-scope";
 import { SyncStateStore } from "./state";
 import { LocalChangeTracker, type TrackerSnapshot } from "./local-tracker";
 import { collectChanges } from "./change-detector";
-import { hasChanged, hasRemoteChanged } from "./change-compare";
 import { planSync } from "./decision-engine";
 import { refinePlan } from "./rename-optimizer";
 import { executePlan, toConflictRecords, DESKTOP_TRANSFER_POOL, MOBILE_TRANSFER_POOL } from "./plan-executor";
-import type { ExecutionContext, ExecutionResult, FailedAction } from "./plan-executor";
-import { classifyHttpError, type ErrorClassification } from "../fs/errors";
+import type { ExecutionContext, ExecutionResult } from "./plan-executor";
+import { classifyHttpError } from "../fs/errors";
 import { decideRetry, sleep } from "./error";
-import type { ConflictRecord, SyncStatus, SyncAction, SyncActionType } from "./types";
-import { buildSyncRecord } from "./state-committer";
+import type { ConflictRecord, SyncStatus, SyncAction } from "./types";
+import { pullIfFastForward } from "./pull-single";
 import { CycleSummary } from "./sync-notification";
 import type { SyncCycleResult } from "./sync-notification";
 import {
-	splitPlanAtLimit,
 	enforceListingCompleteness,
 	SuspiciousListingError,
-	DeletionVelocityTracker,
 	protectFoldersWithSurvivors,
-	isDeletionAction,
 	deletionKey,
 } from "./deletion-guard";
-
-interface FailedActionEntry {
-	key: string;
-	actionFingerprint: string;
-	consecutiveFailures: number;
-	blockedUntil: number;
-}
-
-const FAILED_ACTION_BLOCK_THRESHOLD = 2;
-const FAILED_ACTION_BLOCK_TTL_MS = 5 * 60 * 1000;
-const BLOCKABLE_LOCAL_ORIGIN_ACTIONS = new Set<SyncActionType>(["push", "delete_remote", "rename_remote"]);
-
-class FailedActionTracker {
-	private readonly entries = new Map<string, FailedActionEntry>();
-
-	isBlocked(backendType: string, action: SyncAction, now = Date.now()): string | null {
-		if (!isBlockableLocalOriginAction(action)) return null;
-		this.expire(now);
-		const prefix = this.actionPrefix(backendType, action);
-		const fingerprint = actionFingerprint(action);
-		for (const entry of this.entries.values()) {
-			if (!entry.key.startsWith(prefix)) continue;
-			if (entry.actionFingerprint !== fingerprint) {
-				this.entries.delete(entry.key);
-				continue;
-			}
-			if (entry.blockedUntil > now) {
-				return `blocked after ${entry.consecutiveFailures} repeated failures; retry after ${new Date(entry.blockedUntil).toISOString()}`;
-			}
-		}
-		return null;
-	}
-
-	recordSuccess(backendType: string, action: SyncAction): void {
-		this.clearAction(backendType, action);
-	}
-
-	recordFailure(
-		backendType: string,
-		failed: FailedAction,
-		classification: ErrorClassification,
-		now = Date.now(),
-	): void {
-		if (!isBlockableLocalOriginAction(failed.action)) return;
-		this.expire(now);
-		const failureCode = quarantineFailureCode(classification);
-		if (!failureCode) {
-			this.clearAction(backendType, failed.action);
-			return;
-		}
-		const key = this.key(backendType, failed.action, failureCode);
-		const fingerprint = actionFingerprint(failed.action);
-		const existing = this.entries.get(key);
-		const consecutiveFailures = existing?.actionFingerprint === fingerprint
-			? existing.consecutiveFailures + 1
-			: 1;
-		this.clearAction(backendType, failed.action);
-		this.entries.set(key, {
-			key,
-			actionFingerprint: fingerprint,
-			consecutiveFailures,
-			blockedUntil: consecutiveFailures >= FAILED_ACTION_BLOCK_THRESHOLD
-				? now + FAILED_ACTION_BLOCK_TTL_MS
-				: 0,
-		});
-	}
-
-	isBlockingFailure(
-		backendType: string,
-		failed: FailedAction,
-		classification: ErrorClassification,
-		now = Date.now(),
-	): boolean {
-		if (!isBlockableLocalOriginAction(failed.action)) return false;
-		const failureCode = quarantineFailureCode(classification);
-		if (!failureCode) return false;
-		const entry = this.entries.get(this.key(backendType, failed.action, failureCode));
-		return !!entry && entry.actionFingerprint === actionFingerprint(failed.action) && entry.blockedUntil > now;
-	}
-
-	private expire(now: number): void {
-		for (const [key, entry] of this.entries) {
-			if (entry.blockedUntil > 0 && entry.blockedUntil <= now) this.entries.delete(key);
-		}
-	}
-
-	private actionPrefix(backendType: string, action: SyncAction): string {
-		return `${backendType}\u0000${action.action}\u0000${action.path}\u0000`;
-	}
-
-	private clearAction(backendType: string, action: SyncAction): void {
-		const prefix = this.actionPrefix(backendType, action);
-		for (const key of [...this.entries.keys()]) {
-			if (key.startsWith(prefix)) this.entries.delete(key);
-		}
-	}
-
-	private key(backendType: string, action: SyncAction, failureCode: string): string {
-		return `${this.actionPrefix(backendType, action)}permanent\u0000${failureCode}`;
-	}
-}
-
-function isBlockableLocalOriginAction(action: SyncAction): boolean {
-	return BLOCKABLE_LOCAL_ORIGIN_ACTIONS.has(action.action);
-}
-
-function quarantineFailureCode(classification: ErrorClassification): string | null {
-	return classification.kind === "permanent" && classification.permanentCode
-		? classification.permanentCode
-		: null;
-}
-
-function actionFingerprint(action: SyncAction): string {
-	return JSON.stringify({
-		action: action.action,
-		path: action.path,
-		oldPath: "oldPath" in action ? action.oldPath : undefined,
-		local: entityFingerprint(action.local),
-		remote: entityFingerprint(action.remote),
-		baseline: action.baseline
-			? {
-				hash: action.baseline.hash,
-				localMtime: action.baseline.localMtime,
-				remoteMtime: action.baseline.remoteMtime,
-				localSize: action.baseline.localSize,
-				remoteSize: action.baseline.remoteSize,
-			}
-			: undefined,
-	});
-}
-
-function entityFingerprint(entity: SyncAction["local"]): unknown {
-	if (!entity) return undefined;
-	return {
-		isDirectory: entity.isDirectory,
-		size: entity.size,
-		mtime: entity.mtime,
-		hash: entity.hash,
-	};
-}
+import { FailedActionTracker } from "./failed-action-tracker";
+import { HeldDeletions } from "./held-deletions";
 
 export type { SyncStatus };
 
@@ -209,21 +64,8 @@ export class SyncOrchestrator {
 	private syncMutex = new AsyncMutex();
 	private stateStore: SyncStateStore;
 	private syncPending = false;
-	private readonly velocityTracker = new DeletionVelocityTracker();
-	/**
-	 * Deletions quarantined by the limit or velocity guard in the latest cycle,
-	 * awaiting approval. Re-derived every cycle (their paths are re-evaluated from
-	 * current state), so it never goes stale.
-	 */
-	private pendingDeletions: SyncAction[] = [];
-	/**
-	 * Keys ({@link deletionKey}) of held deletions the user approved. Consumed by the
-	 * next executed cycle: a matching deletion in that cycle's FRESH plan bypasses the
-	 * limit and velocity guards; any other deletion is still guarded.
-	 */
-	private approvedDeletionKeys = new Set<string>();
-	/** Keys of the last held set, so an unchanged hold doesn't re-notify every cycle. */
-	private heldSignature = "";
+	/** Deletions held for review by the mass-deletion guard, and the user's approvals. */
+	private readonly heldDeletions = new HeldDeletions();
 	/**
 	 * A cycle that ended with failures may have advanced the backend's in-memory
 	 * delta cursor past work it never committed (the committed checkpoint is held
@@ -267,7 +109,7 @@ export class SyncOrchestrator {
 
 	/** Returns the deletions currently quarantined by the limit or velocity guard. */
 	getPendingDeletions(): SyncAction[] {
-		return [...this.pendingDeletions];
+		return this.heldDeletions.pending();
 	}
 
 	/**
@@ -285,11 +127,9 @@ export class SyncOrchestrator {
 	 * plans for an approved (action, path) pair bypass the guards.
 	 */
 	async approvePendingDeletions(actionsToApprove?: readonly SyncAction[]): Promise<void> {
-		const target = actionsToApprove ?? this.pendingDeletions;
-		if (target.length === 0) return;
-		this.approvedDeletionKeys = new Set(target.map(deletionKey));
-		this.velocityTracker.reset();
-		this.deps.logger?.info("Held deletions approved", { count: this.approvedDeletionKeys.size });
+		const count = this.heldDeletions.approve(actionsToApprove);
+		if (count === 0) return;
+		this.deps.logger?.info("Held deletions approved", { count });
 		await this.runSync();
 	}
 
@@ -304,30 +144,9 @@ export class SyncOrchestrator {
 		return hasRemote && !isLocked && !isConnecting && isLayoutReady;
 	}
 
+	/** Whether `path` is outside the sync scope (see {@link isExcludedFromSync}). */
 	isExcluded(path: string): boolean {
-		const settings = this.deps.getSettings();
-		// The backend's own metadata file is reserved: never sync it from either
-		// side, even when `.airsync` is opted into syncDotPaths. The remote FS also
-		// hides it; excluding it here keeps the exclusion symmetric (otherwise a
-		// local copy would be pushed, then deleted as a phantom remote deletion).
-		if (path === INTERNAL_METADATA_PATH) return true;
-		// Exclude conflict tracker index
-		if (path === "sync-conflicts.md") return true;
-		const configDir = this.deps.configDir();
-		// This plugin's own settings file: safety-critical config must not
-		// round-trip through sync/merge. Multi-device settings sync, if wanted, must
-		// use a separate explicitly-synced file rather than the active config.
-		if (isOwnPluginDataPath(path, configDir, this.deps.pluginId())) return true;
-		// OS-generated junk (desktop.ini, thumbs.db, .DS_Store) is never synced on any
-		// backend — treated as non-existent like the reserved metadata path. Beyond
-		// being noise, some backends (Dropbox) reject these outright, which would
-		// otherwise fail every cycle and block the delta checkpoint.
-		if (isSystemJunkFile(path)) return true;
-		// A path syncs only if it passes BOTH gates: the dot-path scope
-		// (hidden paths are in scope only when opted into syncDotPaths) AND
-		// the user's ignore patterns.
-		if (isDotPathOutOfScope(path, getEffectiveSyncDotPaths(settings, configDir))) return true;
-		return isIgnored(path, getEffectiveIgnorePatterns(settings, configDir, this.deps.pluginId()));
+		return isExcludedFromSync(path, this.deps.getSettings(), this.deps.configDir(), this.deps.pluginId());
 	}
 
 	/**
@@ -550,48 +369,13 @@ export class SyncOrchestrator {
 				return;
 			}
 
-			try {
-				const remote = await remoteFs.stat(path);
-				if (!remote || remote.isDirectory) {
-					this.deps.logger?.warn("pullSingle: remote file not found or is a directory", { path });
-					return;
-				}
-
-				// Re-check under the lock. The file-open handler decided "remote changed,
-				// local untouched" BEFORE queueing behind any in-flight sync, and the user
-				// may have kept typing into the open file (or deleted it, or that sync
-				// already reconciled it) while this waited. Only a clean fast-forward may
-				// overwrite: with a baseline, the local file must still exist unchanged
-				// while the remote changed; without one, nothing may exist locally.
-				// Anything else is left to the next full cycle's conflict handling.
-				const [baseline, local] = await Promise.all([
-					this.stateStore.get(path),
-					localFs.stat(path),
-				]);
-				const fastForward = baseline
-					? !!local && !hasChanged(local, baseline) && hasRemoteChanged(remote, baseline)
-					: !local;
-				if (!fastForward) {
-					this.deps.logger?.debug("pullSingle: skipped — not a clean fast-forward any more", { path });
-					return;
-				}
-
-				const content = await remoteFs.read(path);
-				const localEntity = await localFs.write(path, content, remote.mtime);
-
-				const record = buildSyncRecord(localEntity, remote, path);
-				await this.stateStore.put(record);
-				// Only a completed pull consumes the dirty mark; a skipped or failed pull
-				// leaves it for the next cycle.
-				this.deps.localTracker.acknowledgePath(path);
-
-				this.deps.logger?.info("pullSingle: completed", { path });
-			} catch (err) {
-				this.deps.logger?.error("pullSingle: failed", {
-					path,
-					error: err instanceof Error ? err.message : String(err),
-				});
-			}
+			await pullIfFastForward(path, {
+				localFs,
+				remoteFs,
+				stateStore: this.stateStore,
+				localTracker: this.deps.localTracker,
+				logger: this.deps.logger,
+			});
 		});
 	}
 
@@ -624,7 +408,7 @@ export class SyncOrchestrator {
 			forceFullScan,
 			// Re-evaluate held deletions every cycle until they are approved or no longer
 			// planned — the delta cursor has already moved past remote-origin ones.
-			extraPaths: this.pendingDeletions.map((a) => a.path),
+			extraPaths: this.heldDeletions.pending().map((a) => a.path),
 		});
 
 		const { renamePairs, folderRenamePairs } = snapshot;
@@ -715,42 +499,25 @@ export class SyncOrchestrator {
 		// are quarantined: the safe actions (pushes, pulls, merges) still execute this
 		// cycle, and the user is notified to approve the held deletions separately.
 		// Deletions the user already approved are neither counted nor held.
-		const approved = this.approvedDeletionKeys;
-		const isApproved = (a: SyncAction) => approved.has(deletionKey(a));
-		const unapprovedDeleteCount = plan.actions.filter((a) => isDeletionAction(a) && !isApproved(a)).length;
-		const velocityBlocked = unapprovedDeleteCount > 0 &&
-			this.velocityTracker.wouldExceedVelocityLimit(unapprovedDeleteCount);
-		const split = splitPlanAtLimit(plan, settings.maxDeletionsPerSync, {
-			holdAll: velocityBlocked,
-			isApproved,
-		});
-
-		this.pendingDeletions = split.held;
-		const heldSignature = split.held.map(deletionKey).sort().join("\n");
-		if (split.hasHeld) {
+		const { executionPlan, held, velocityBlocked, isNewHold } =
+			this.heldDeletions.gate(plan, settings.maxDeletionsPerSync);
+		if (held.length > 0) {
 			this.deps.logger?.warn("Deletions quarantined", {
-				held: split.held.length,
+				held: held.length,
 				velocityBlocked,
-				safe: split.safe.actions.length,
-				paths: split.held.slice(0, 50).map(deletionKey),
+				safe: executionPlan.actions.length,
+				paths: held.slice(0, 50).map(deletionKey),
 			});
-			if (heldSignature !== this.heldSignature) {
+			if (isNewHold) {
 				this.deps.notify(
-					`${split.held.length} deletions held for review — everything else synced. ` +
+					`${held.length} deletions held for review — everything else synced. ` +
 					`Run the "Approve held deletions" command to apply them.`,
 					15_000,
 				);
-				this.deps.onDeletionsHeld?.(split.held);
+				this.deps.onDeletionsHeld?.(held);
 			}
 		}
-		this.heldSignature = heldSignature;
 
-		const executionPlan = split.safe;
-		const executedDeleteCount = executionPlan.actions.filter(isDeletionAction).length;
-		if (executedDeleteCount > 0) {
-			// Deletions executed this cycle — record them for velocity tracking
-			this.velocityTracker.record(executedDeleteCount);
-		}
 		const total = executionPlan.actions.length;
 
 		const provider = this.deps.backendProvider();
@@ -774,17 +541,16 @@ export class SyncOrchestrator {
 		};
 
 		const result = await executePlan(executionPlan, ctx);
-		// The approval applied to the plan that just ran; later cycles are guarded again.
-		this.approvedDeletionKeys = new Set();
+		this.heldDeletions.endCycle();
 		const classifyError = (err: unknown) => provider?.classifyError?.(err) ?? classifyHttpError(err);
-		this.updateFailedActionTracker(settings.backendType, result, classifyError);
+		this.failedActionTracker.recordCycle(settings.backendType, result, classifyError);
 
 		// Persist backend state. commitCheckpoint advances the delta cursor (+ file map,
 		// atomically) only on a fully clean cycle; a partial sync keeps the prior cursor.
 		// Held deletions also keep it: the persisted cursor then still precedes the
 		// remote deletions being held, so a restart replays and re-holds them instead of
 		// forgetting them (and later resurrecting the files on the other side).
-		const cleanCycle = result.failed.length === 0 && !split.hasHeld;
+		const cleanCycle = result.failed.length === 0 && held.length === 0;
 		// The checkpoint lives on the FS now (no provider downcast): flush it only on a
 		// fully clean cycle so a partial sync keeps the prior committed cursor.
 		if (cleanCycle && remoteFs?.checkpoint) {
@@ -806,33 +572,12 @@ export class SyncOrchestrator {
 		return result;
 	}
 
-	private updateFailedActionTracker(
-		backendType: string,
-		result: ExecutionResult,
-		classifyError: (err: unknown) => ErrorClassification,
-	): void {
-		for (const succeeded of result.succeeded) {
-			this.failedActionTracker.recordSuccess(backendType, succeeded.action);
-		}
-		for (const failed of result.failed) {
-			this.failedActionTracker.recordFailure(
-				backendType,
-				failed,
-				classifyError(failed.error),
-			);
-		}
-	}
-
 	private needsColdRecovery(result: ExecutionResult): boolean {
-		const settings = this.deps.getSettings();
 		const provider = this.deps.backendProvider();
-		const classifyError = (err: unknown) => provider?.classifyError?.(err) ?? classifyHttpError(err);
-		return result.failed.some((failed) =>
-			!this.failedActionTracker.isBlockingFailure(
-				settings.backendType,
-				failed,
-				classifyError(failed.error),
-			)
+		return this.failedActionTracker.needsColdRecovery(
+			this.deps.getSettings().backendType,
+			result,
+			(err) => provider?.classifyError?.(err) ?? classifyHttpError(err),
 		);
 	}
 }

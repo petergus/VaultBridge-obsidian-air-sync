@@ -6,6 +6,7 @@ import type { Logger } from "../logging/logger";
 import { getBackendProvider, getAllBackendProviders } from "./registry";
 import { AuthError } from "./errors";
 import { completeAuthFolderPick } from "./backend-auth-folder-pick";
+import type { RemoteVaultResolution } from "./remote-vault-contract";
 
 export interface BackendManagerDeps {
 	getSettings: () => VaultBridgeSettings;
@@ -131,48 +132,71 @@ export class BackendManager {
 		if (this.remoteFs) this.deps.onRemoteBound();
 	}
 
+	/** The active backend's provider, resolved from the registry on first use. */
+	private resolveProvider(): IBackendProvider | null {
+		this.backendProvider ??= getBackendProvider(this.deps.getSettings().backendType) ?? null;
+		return this.backendProvider;
+	}
+
 	/**
-	 * Bind this vault to its default remote folder (obsidian-air-sync/<Vault Name>),
-	 * creating it or migrating a legacy folder as needed, then re-init against it.
-	 * The counterpart to {@link completeBackendFolderPick} for the "use default folder"
-	 * button — same connecting-guard / reset / re-init shape.
+	 * Bind the vault to a new remote folder, then re-init against it. Shared by the
+	 * "use default folder" button and the web folder picker. `connecting` is held across
+	 * the bind so a scheduled sync can't start against the old target mid-rebind (the
+	 * orchestrator gates on isConnecting()). The new target's checkpoint reset happens in
+	 * initBackend() below, when it re-detects the identity change (the cursor lives in
+	 * the per-target store — ADR 0001); it also clears sync state and builds the FS.
 	 */
-	async bindDefaultRemoteVault(): Promise<void> {
+	private async rebindRemoteFolder(opts: {
+		busyMessage: string;
+		missingMessage: string;
+		failureLog: string;
+		/** The provider's binder for this flow, or undefined when it doesn't support it. */
+		binder: (provider: IBackendProvider) => ((settings: VaultBridgeSettings) => Promise<RemoteVaultResolution>) | undefined;
+	}): Promise<void> {
+		// The trigger (a button, or a fire-and-forget deep link) can't wait; if a
+		// connect/rebind is in flight, say so rather than silently dropping the request.
 		if (this.connecting) {
-			this.deps.notify("Busy connecting — try again in a moment.");
+			this.deps.notify(opts.busyMessage);
 			return;
 		}
 		const settings = this.deps.getSettings();
-		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
-		this.backendProvider = provider;
-		if (!provider?.resolveRemoteVault) {
-			this.deps.notify("This backend has no default folder.");
+		const provider = this.resolveProvider();
+		const bind = provider ? opts.binder(provider) : undefined;
+		if (!bind) {
+			this.deps.notify(opts.missingMessage);
 			return;
 		}
 
-		// Hold `connecting` across the bind so a scheduled sync can't start mid-rebind.
 		this.connecting = true;
 		try {
-			const result = await provider.resolveRemoteVault(
-				this.deps.getApp(), settings, this.deps.getVaultName(), this.deps.getLogger(),
-			);
+			const result = await bind(settings);
 			settings.backendData = { ...settings.backendData, ...result.backendUpdates };
 			await this.deps.saveSettings();
-			// New target's checkpoint reset happens in initBackend() below, when it
-			// re-detects the identity change (the cursor lives in the per-target store
-			// now, so there is no stale settings cursor to drop here — ADR 0001).
 			this.deps.notify("Remote folder updated");
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			this.deps.getLogger().error("Failed to bind default folder", { message: msg });
+			this.deps.getLogger().error(opts.failureLog, { message: msg });
 			this.deps.notify(`Folder selection failed: ${msg}`);
 			return;
 		} finally {
 			this.connecting = false;
 		}
-		// Re-init detects the new identity, clears sync state, and builds an FS.
 		await this.initBackend();
 		this.deps.refreshSettingsDisplay();
+	}
+
+	/** Bind this vault to its default remote folder (obsidian-air-sync/<Vault Name>), creating or migrating it. */
+	async bindDefaultRemoteVault(): Promise<void> {
+		await this.rebindRemoteFolder({
+			busyMessage: "Busy connecting — try again in a moment.",
+			missingMessage: "This backend has no default folder.",
+			failureLog: "Failed to bind default folder",
+			binder: (provider) => provider.resolveRemoteVault
+				? (settings) => provider.resolveRemoteVault!(
+					this.deps.getApp(), settings, this.deps.getVaultName(), this.deps.getLogger(),
+				)
+				: undefined,
+		});
 	}
 
 	/**
@@ -181,8 +205,7 @@ export class BackendManager {
 	 */
 	async startBackendFolderPick(): Promise<void> {
 		const settings = this.deps.getSettings();
-		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
-		this.backendProvider = provider;
+		const provider = this.resolveProvider();
 		if (!provider?.picker) {
 			this.deps.notify("This backend has no folder picker.");
 			return;
@@ -201,48 +224,19 @@ export class BackendManager {
 		}
 	}
 
-	/** Bind the folder selected via the web picker, then re-init against the new target. */
+	/**
+	 * Bind the folder selected via the web picker, then re-init against the new target.
+	 * `pendingFolderPickState` stays set on a busy drop, so a retry still validates.
+	 */
 	async completeBackendFolderPick(params: Record<string, string | undefined>): Promise<void> {
-		// The deep link is fire-and-forget; if a connect/rebind is in flight, surface
-		// that the selection was dropped so the user knows to retry (silent loss reads
-		// as "it worked"). pendingFolderPickState stays set, so a retry still validates.
-		if (this.connecting) {
-			this.deps.notify("Busy connecting — reopen the folder picker in a moment.");
-			return;
-		}
-		const settings = this.deps.getSettings();
-		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
-		this.backendProvider = provider;
-		if (!provider?.picker) {
-			this.deps.notify("This backend has no folder picker.");
-			return;
-		}
-
-		// Hold `connecting` across the bind so a scheduled sync can't start against the
-		// old target mid-rebind (the orchestrator gates on isConnecting()).
-		this.connecting = true;
-		try {
-			const result = await provider.picker.completeWebFolderPick(
-				params, settings, this.deps.getLogger(),
-			);
-			settings.backendData = { ...settings.backendData, ...result.backendUpdates };
-			await this.deps.saveSettings();
-			// New target's checkpoint reset happens in initBackend() below, when it
-			// re-detects the identity change (the cursor lives in the per-target store
-			// now — ADR 0001).
-			this.deps.notify("Remote folder updated");
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			this.deps.getLogger().error("Failed to bind picked folder", { message: msg });
-			this.deps.notify(`Folder selection failed: ${msg}`);
-			return;
-		} finally {
-			this.connecting = false;
-		}
-		// Re-init detects the new identity, clears sync state, and builds an FS
-		// against the chosen folder.
-		await this.initBackend();
-		this.deps.refreshSettingsDisplay();
+		await this.rebindRemoteFolder({
+			busyMessage: "Busy connecting — reopen the folder picker in a moment.",
+			missingMessage: "This backend has no folder picker.",
+			failureLog: "Failed to bind picked folder",
+			binder: ({ picker }) => picker
+				? (settings) => picker.completeWebFolderPick(params, settings, this.deps.getLogger())
+				: undefined,
+		});
 	}
 
 	/**
@@ -260,8 +254,7 @@ export class BackendManager {
 			return;
 		}
 		const settings = this.deps.getSettings();
-		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
-		this.backendProvider = provider;
+		const provider = this.resolveProvider();
 		if (!provider?.picker) {
 			this.deps.notify("This backend has no folder picker.");
 			return;
@@ -294,10 +287,7 @@ export class BackendManager {
 	/** Start the backend's auth/connection flow */
 	async startBackendConnect(): Promise<void> {
 		const settings = this.deps.getSettings();
-		if (!this.backendProvider) {
-			this.backendProvider =
-				getBackendProvider(settings.backendType) ?? null;
-		}
+		this.resolveProvider();
 		if (!this.backendProvider) {
 			this.deps.notify("No backend configured");
 			return;
@@ -322,8 +312,7 @@ export class BackendManager {
 		}
 
 		const settings = this.deps.getSettings();
-		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
-		this.backendProvider = provider;
+		const provider = this.resolveProvider();
 		if (!provider) {
 			this.deps.notify("Start the connection flow first");
 			return;
@@ -427,8 +416,7 @@ export class BackendManager {
 		}
 
 		const settings = this.deps.getSettings();
-		const provider = this.backendProvider ?? getBackendProvider(settings.backendType) ?? null;
-		this.backendProvider = provider;
+		const provider = this.resolveProvider();
 		if (!provider) return;
 
 		this.connecting = true;

@@ -6,8 +6,10 @@ import {
 	getConfigSyncIgnorePatterns,
 	getEffectiveSyncDotPaths,
 	getEffectiveIgnorePatterns,
+	getBuiltInIgnorePatterns,
 	isOwnPluginDataPath,
 } from "./config-sync";
+import { isIgnored } from "./utils/ignore";
 
 // A vault's configDir is user-configurable, so tests use a value distinct from
 // the (arbitrary) Obsidian default to prove the logic doesn't hardcode it.
@@ -30,17 +32,43 @@ describe("getEffectiveSyncDotPaths", () => {
 });
 
 describe("getEffectiveIgnorePatterns", () => {
-	it("leaves ignorePatterns unchanged when config sync is disabled", () => {
+	it("prepends only the built-in patterns when config sync is disabled", () => {
 		const settings = mockSettings({ enableConfigSync: false, ignorePatterns: ["*.tmp"] });
-		expect(getEffectiveIgnorePatterns(settings, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toEqual(["*.tmp"]);
+		expect(getEffectiveIgnorePatterns(settings, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toEqual([
+			...getBuiltInIgnorePatterns(settings, TEST_CONFIG_DIR),
+			"*.tmp",
+		]);
 	});
 
-	it("prepends the built-in patterns when config sync is enabled", () => {
+	it("prepends the config-sync and built-in patterns when config sync is enabled", () => {
 		const settings = mockSettings({ enableConfigSync: true, ignorePatterns: ["*.tmp"] });
 		expect(getEffectiveIgnorePatterns(settings, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toEqual([
 			...getConfigSyncIgnorePatterns(settings, TEST_CONFIG_DIR, TEST_PLUGIN_ID),
+			...getBuiltInIgnorePatterns(settings, TEST_CONFIG_DIR),
 			"*.tmp",
 		]);
+	});
+});
+
+describe("getBuiltInIgnorePatterns", () => {
+	it("excludes regenerable config subtrees under the configured config dir", () => {
+		const patterns = getBuiltInIgnorePatterns(mockSettings(), ".cfg");
+		expect(isIgnored(".cfg/icons/pack/a.svg", patterns)).toBe(true);
+		expect(isIgnored(".cfg/themes/Minimal/.git/HEAD", patterns)).toBe(true);
+		expect(isIgnored(".cfg/themes/Minimal/theme.css", patterns)).toBe(false);
+	});
+
+	it("lets icons through once Sync icons is on", () => {
+		const settings = mockSettings({ enableConfigSync: true, syncConfigIcons: true });
+		const patterns = getEffectiveIgnorePatterns(settings, ".cfg", TEST_PLUGIN_ID);
+		expect(isIgnored(".cfg/icons/pack/a.svg", patterns)).toBe(false);
+	});
+
+	it("keeps theme git checkouts out even when themes sync", () => {
+		const settings = mockSettings({ enableConfigSync: true, syncConfigThemes: true });
+		const patterns = getEffectiveIgnorePatterns(settings, ".cfg", TEST_PLUGIN_ID);
+		expect(isIgnored(".cfg/themes/Minimal/theme.css", patterns)).toBe(false);
+		expect(isIgnored(".cfg/themes/Minimal/.git/HEAD", patterns)).toBe(true);
 	});
 });
 

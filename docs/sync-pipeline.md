@@ -11,10 +11,10 @@ Each sync cycle runs a 4-phase pipeline:
 
 The orchestrator (`SyncOrchestrator.executeSyncOnce()`) drives this pipeline, applying scope filtering and mobile size limits between Collect and Decide.
 
-**Scope filter (`SyncOrchestrator.isExcluded()`)** — a path is synced only if it passes **both** gates:
+**Scope filter (`SyncOrchestrator.isExcluded()`, policy in `sync/sync-scope.ts`)** — a path is synced only if it passes **both** gates:
 
 1. **Dot-path scope** (`isDotPathOutOfScope`): a dot-prefixed/hidden path (`.airsync`, `.obsidian`, `.git`, …) is in scope only when it sits under a configured `syncDotPaths` root. Normal paths always pass. This is applied symmetrically to local and remote entries, so an out-of-scope hidden path on the remote (e.g. another device's `.airsync/logs/`) is never pulled, and never produces a `delete_remote` (the gate runs before `planSync`).
-2. **Ignore patterns** (`isIgnored`): gitignore-style `ignorePatterns`.
+2. **Ignore patterns** (`isIgnored`): gitignore-style `ignorePatterns`, preceded by the automatic patterns (`getInjectedIgnorePatterns`, `config-sync.ts`): the config-sync patterns when config sync is on, then the built-in regenerable config-dir subtrees (`<configDir>/icons/**` unless "Sync icons" is on, `<configDir>/themes/**/.git/**`). These are built from `Vault#configDir`, which is user-configurable; a user `!pattern` can still re-include anything they cover.
 
 `isExcluded()` also reserves the backend's own metadata path (`INTERNAL_METADATA_PATH` = `.airsync/metadata.json`, `sync/remote-vault.ts`): it is never synced from either side, even when `.airsync` is opted into `syncDotPaths`. The remote FS hides it too; excluding it here keeps the exclusion symmetric (otherwise a local copy would be pushed, then deleted as a phantom remote deletion).
 

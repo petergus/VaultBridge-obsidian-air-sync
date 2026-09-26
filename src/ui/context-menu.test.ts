@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { App, MarkdownView, TAbstractFile } from "obsidian";
-import { Menu, MenuItem, Notice } from "obsidian";
+import type { Mock } from "vitest";
+import type { App, MarkdownView, MenuItem, TAbstractFile } from "obsidian";
+import { Menu, Notice } from "obsidian";
 import { registerContextMenuHandlers } from "./context-menu";
+import { DirectDeleteConfirmModal } from "./direct-delete-modal";
 import type { BackendManager } from "../fs/backend-manager";
 import type { IBackendProvider } from "../fs/backend";
 import type { IFileSystem } from "../fs/interface";
+import type { SyncOrchestrator } from "../sync/orchestrator";
+import { __ui, MenuItem as FakeMenuItem } from "../__mocks__/obsidian";
 
 vi.mock("obsidian");
 
@@ -15,29 +19,32 @@ interface TestMenuItem {
 }
 
 function getMenuItems(menu: Menu): TestMenuItem[] {
-	return (menu as any).items ?? [];
+	// The mocked Menu (see __mocks__/obsidian.ts) records its items.
+	return (menu as unknown as { items?: TestMenuItem[] }).items ?? [];
 }
 
 function createMockMenuItem(): MenuItem & TestMenuItem {
-	const item: any = {
-		title: "",
-		icon: "",
-		callback: null,
-		setTitle(t: string) {
-			item.title = t;
-			return item;
-		},
-		setIcon(i: string) {
-			item.icon = i;
-			return item;
-		},
-		onClick(cb: (evt?: unknown) => unknown) {
-			item.callback = cb;
-			return item;
-		},
-	};
-	return item;
+	return new FakeMenuItem() as unknown as MenuItem & TestMenuItem;
 }
+
+/** The slice of Notebook Navigator's menu API the integration calls back with. */
+type NnMenuCallback = (ctx: {
+	addItem: (cb: (item: MenuItem) => void) => void;
+	file?: TAbstractFile;
+	folder?: TAbstractFile;
+	selection?: { mode: string; files: TAbstractFile[] };
+}) => void;
+
+/** Read Menu.prototype.showAtMouseEvent as a value, to check it is patched and restored. */
+function currentShowAtMouseEvent(): unknown {
+	return Reflect.get(Menu.prototype, "showAtMouseEvent");
+}
+
+/** The delete hooks only need the orchestrator to exist. */
+const deleteOrchestrator = {
+	state: { delete: vi.fn() },
+	runSync: vi.fn(),
+} as unknown as SyncOrchestrator;
 
 describe("registerContextMenuHandlers", () => {
 	let mockApp: App;
@@ -47,14 +54,14 @@ describe("registerContextMenuHandlers", () => {
 	let registeredEvents: ((...args: unknown[]) => unknown)[];
 	let workspaceEventHandlers: Record<string, (...args: unknown[]) => unknown>;
 	let cleanupCallbacks: (() => void)[];
-	let domEventHandlers: Record<string, (evt: unknown) => unknown>;
+	let domEventHandlers: Record<string, (evt: MouseEvent) => void>;
 	let mockWindowOpen: ReturnType<typeof vi.fn>;
 	let mockFilesByPath: Record<string, TAbstractFile>;
 	let mockNnPlugin: {
 		api: {
 			menus: {
-				registerFileMenu: ReturnType<typeof vi.fn>;
-				registerFolderMenu: ReturnType<typeof vi.fn>;
+				registerFileMenu: Mock<(cb: NnMenuCallback) => void>;
+				registerFolderMenu: Mock<(cb: NnMenuCallback) => void>;
 			};
 		};
 	};
@@ -73,8 +80,8 @@ describe("registerContextMenuHandlers", () => {
 		mockNnPlugin = {
 			api: {
 				menus: {
-					registerFileMenu: vi.fn(),
-					registerFolderMenu: vi.fn(),
+					registerFileMenu: vi.fn<(cb: NnMenuCallback) => void>(),
+					registerFolderMenu: vi.fn<(cb: NnMenuCallback) => void>(),
 				},
 			},
 		};
@@ -406,11 +413,11 @@ describe("registerContextMenuHandlers", () => {
 		});
 
 		it("restores Menu prototype on cleanup", () => {
-			const originalShow = Menu.prototype.showAtMouseEvent;
+			const originalShow = currentShowAtMouseEvent();
 			registerHandlers();
 
 			// Hooked
-			expect(Menu.prototype.showAtMouseEvent).not.toBe(originalShow);
+			expect(currentShowAtMouseEvent()).not.toBe(originalShow);
 
 			// Clean up all
 			for (const cleanup of cleanupCallbacks) {
@@ -418,21 +425,16 @@ describe("registerContextMenuHandlers", () => {
 			}
 
 			// Restored
-			expect(Menu.prototype.showAtMouseEvent).toBe(originalShow);
+			expect(currentShowAtMouseEvent()).toBe(originalShow);
 		});
 	});
 
 	describe("Normal delete hook and confirmation", () => {
 		it("does not add a separate delete menu item, only hooks the normal delete", () => {
-			const mockOrchestrator = {
-				state: { delete: vi.fn() },
-				runSync: vi.fn(),
-			};
-
 			registerContextMenuHandlers({
 				app: mockApp,
 				backendManager: mockBackendManager,
-				orchestrator: mockOrchestrator as any,
+				orchestrator: deleteOrchestrator,
 				registerEvent: (ref) => registeredEvents.push(ref as never),
 				registerDomEvent: (_el, type, cb) => {
 					domEventHandlers[type] = cb;
@@ -455,15 +457,10 @@ describe("registerContextMenuHandlers", () => {
 		});
 
 		it("hooks the existing normal delete menu item to trigger confirmation modal", () => {
-			const mockOrchestrator = {
-				state: { delete: vi.fn() },
-				runSync: vi.fn(),
-			};
-
 			registerContextMenuHandlers({
 				app: mockApp,
 				backendManager: mockBackendManager,
-				orchestrator: mockOrchestrator as any,
+				orchestrator: deleteOrchestrator,
 				registerEvent: (ref) => registeredEvents.push(ref as never),
 				registerDomEvent: (_el, type, cb) => {
 					domEventHandlers[type] = cb;
@@ -488,7 +485,10 @@ describe("registerContextMenuHandlers", () => {
 			const items = getMenuItems(menu);
 			const deleteItem = items.find((i) => i.title.toLowerCase().includes("delete"));
 			expect(deleteItem).toBeDefined();
-			expect((deleteItem as any).__vaultbridge_hooked).toBe(true);
+			// Clicking the normal Delete now opens the vault-and-cloud confirmation.
+			__ui.lastModal = null;
+			void deleteItem!.callback?.();
+			expect(__ui.lastModal).toBeInstanceOf(DirectDeleteConfirmModal);
 		});
 	});
 });

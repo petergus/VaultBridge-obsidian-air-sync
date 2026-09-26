@@ -111,7 +111,7 @@ describe("Google Workspace types & helpers", () => {
 		it("returns UTF-8 encoded JSON shortcut content compatible with Obsidian GDocs plugin", () => {
 			const buf = buildWorkspaceStubContent(docFile);
 			const text = new TextDecoder().decode(buf);
-			const parsed = JSON.parse(text);
+			const parsed = JSON.parse(text) as unknown;
 
 			expect(parsed).toEqual({
 				url: "https://docs.google.com/document/d/doc-123/edit",
@@ -122,7 +122,7 @@ describe("Google Workspace types & helpers", () => {
 
 		it("returns correct JSON shortcut content for Google Sheets", () => {
 			const buf = buildWorkspaceStubContent(sheetFile);
-			const parsed = JSON.parse(new TextDecoder().decode(buf));
+			const parsed = JSON.parse(new TextDecoder().decode(buf)) as unknown;
 
 			expect(parsed).toEqual({
 				url: "https://docs.google.com/spreadsheets/d/sheet-456/edit",
@@ -255,7 +255,7 @@ describe("GoogleDriveFs workspace operations", () => {
 		await fs.list(); // initialize cache
 
 		const content = await fs.read("Q1 Results.gsheet");
-		const parsed = JSON.parse(new TextDecoder().decode(content));
+		const parsed = JSON.parse(new TextDecoder().decode(content)) as unknown;
 
 		expect(parsed).toEqual({
 			url: "https://docs.google.com/spreadsheets/d/sheet1/edit",

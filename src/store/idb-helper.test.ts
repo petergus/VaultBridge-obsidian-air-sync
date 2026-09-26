@@ -75,7 +75,7 @@ describe("IDBHelper", () => {
 				req.result.close();
 				resolve();
 			};
-			req.onerror = () => reject(req.error);
+			req.onerror = () => reject(req.error ?? new Error("indexedDB.open failed"));
 		});
 
 		// Now open with IDBHelper configured at version 5

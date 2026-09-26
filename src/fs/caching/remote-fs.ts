@@ -6,6 +6,8 @@ import type { Logger } from "../../logging/logger";
 import { AsyncMutex } from "../../queue/async-queue";
 import { normalizeSyncPath } from "../../utils/path";
 import type { AbstractMetadataCache } from "./metadata-cache";
+import { diffCacheById } from "./id-delta";
+import { isNotFoundError } from "../errors";
 
 /** A remote delta: paths added/modified, deleted, and renamed since the last cursor. */
 export interface RemoteDelta {
@@ -412,33 +414,10 @@ export abstract class CachingRemoteFs<TFile> implements IFileSystem {
 		return this.diffById(oldPathById);
 	}
 
-	/**
-	 * Compute a remote delta by diffing a pre-scan path-by-id snapshot against the
-	 * freshly-scanned cache. Keys on backend id, so it detects adds/deletes/renames but
-	 * NOT in-place content edits (same path+id); those are caught by the next incremental
-	 * sync or WARM mode's local-vs-record check.
-	 */
+	/** Diff the freshly-scanned cache against the pre-scan snapshot (see {@link diffCacheById}). */
 	private diffById(oldPathById: Map<string, string>): RemoteDelta {
-		const modified: string[] = [];
-		const deleted: string[] = [];
-		const renamed: RenamePair[] = [];
-		const newIds = new Set<string>();
-		for (const [newPath] of this.cache.entries()) {
-			const id = this.cache.idAt(newPath);
-			if (id === undefined) continue;
-			newIds.add(id);
-			const oldPath = oldPathById.get(id);
-			if (!oldPath) {
-				modified.push(newPath);
-			} else if (oldPath !== newPath) {
-				renamed.push({ oldPath, newPath, isFolder: this.cache.isFolder(newPath) || undefined });
-				modified.push(newPath);
-				deleted.push(oldPath);
-			}
-		}
-		for (const [id, oldPath] of oldPathById) {
-			if (!newIds.has(id)) deleted.push(oldPath);
-		}
+		const delta = diffCacheById(this.cache, oldPathById);
+		const { modified, deleted, renamed } = delta;
 		if (modified.length > 0 || deleted.length > 0 || renamed.length > 0) {
 			this.logger?.info("Full scan delta", {
 				added: modified.length - renamed.length,
@@ -446,7 +425,7 @@ export abstract class CachingRemoteFs<TFile> implements IFileSystem {
 				renamed: renamed.length,
 			});
 		}
-		return { modified, deleted, renamed };
+		return delta;
 	}
 
 	/**
@@ -510,10 +489,7 @@ export abstract class CachingRemoteFs<TFile> implements IFileSystem {
 		try {
 			return await this.downloadFile(fileId);
 		} catch (err) {
-			const isNotFound =
-				(err && typeof err === "object" && "status" in err && (err as { status: number }).status === 404) ||
-				(err instanceof Error && (err.message.includes("File not found") || err.message.toLowerCase().includes("not found")));
-			if (isNotFound) {
+			if (isNotFoundError(err)) {
 				await this.cacheMutex.run(() => {
 					this.cache.removeEntry(path);
 					this.touchedPaths.add(path);

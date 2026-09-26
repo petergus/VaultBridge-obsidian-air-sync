@@ -42,7 +42,7 @@ export class Notice {
  * the UI renders; reset these between tests (`__ui.buttons = []; __ui.lastModal = null`).
  */
 export const __ui: {
-	buttons: { name: string; click: () => void }[];
+	buttons: { name: string; click: () => Promise<void> }[];
 	lastModal: { close: () => void } | null;
 } = { buttons: [], lastModal: null };
 
@@ -56,7 +56,7 @@ export class FakeEl {
 	placeholder = "";
 	style: Record<string, string> = {};
 	attributes: Record<string, string> = {};
-	eventListeners: Record<string, ((e?: any) => void)[]> = {};
+	eventListeners: Record<string, ((e?: unknown) => void)[]> = {};
 
 	constructor(tag = "div", opts?: { text?: string; cls?: string; value?: string; placeholder?: string }) {
 		this.tag = tag;
@@ -124,12 +124,12 @@ export class FakeEl {
 		return this.attributes[name];
 	}
 
-	addEventListener(type: string, listener: (e?: any) => void): void {
+	addEventListener(type: string, listener: (e?: unknown) => void): void {
 		if (!this.eventListeners[type]) this.eventListeners[type] = [];
 		this.eventListeners[type].push(listener);
 	}
 
-	trigger(type: string, event?: any): void {
+	trigger(type: string, event?: unknown): void {
 		const listeners = this.eventListeners[type] ?? [];
 		for (const listener of listeners) {
 			listener(event ?? { target: this });
@@ -202,19 +202,20 @@ export class Setting {
 		return this;
 	}
 	addButton(cb: (b: unknown) => unknown) {
-		let handler: () => void = () => {};
+		let handler: () => unknown = () => undefined;
 		const btn = {
 			setButtonText: (_t: string) => btn,
 			setWarning: () => btn,
 			setCta: () => btn,
 			setClass: (_c: string) => btn,
-			onClick: (h: () => void) => {
+			onClick: (h: () => unknown) => {
 				handler = h;
 				return btn;
 			},
 		};
 		cb(btn);
-		__ui.buttons.push({ name: this._name, click: () => handler() });
+		// Resolves once the (possibly async) click handler settles, so tests can await it.
+		__ui.buttons.push({ name: this._name, click: async () => { await handler(); } });
 		return this;
 	}
 	addText(_cb: (t: unknown) => unknown) {

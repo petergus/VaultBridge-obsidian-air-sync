@@ -1,15 +1,7 @@
-import type { App, TAbstractFile } from "obsidian";
-import { Modal, Notice, Setting, TFolder } from "obsidian";
+import type { App } from "obsidian";
+import { Modal, Notice, Setting } from "obsidian";
 import type { SyncOrchestrator } from "../sync/orchestrator";
-import type { IFileSystem } from "../fs/interface";
 import type { SyncAction } from "../sync/types";
-
-export interface DirectDeleteOptions {
-	remoteFs: IFileSystem;
-	orchestrator?: SyncOrchestrator;
-	displayName: string;
-	onDeleted?: () => void;
-}
 
 /**
  * Summarize a list of held SyncActions by grouping by top-level or second-level directory.
@@ -40,7 +32,7 @@ export class DeletionReviewModal extends Modal {
 	private activeFilter: DeletionFilter = "all";
 	private searchQuery = "";
 	private dynamicContainer: HTMLElement | null = null;
-	private pillElements: HTMLElement[] = [];
+	private pills: { id: DeletionFilter; el: HTMLElement }[] = [];
 
 	constructor(app: App, orchestrator: SyncOrchestrator, onApproved?: () => void) {
 		super(app);
@@ -56,11 +48,11 @@ export class DeletionReviewModal extends Modal {
 	private renderModal(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		this.pillElements = [];
+		this.pills = [];
 
 		const pending = this.orchestrator.getPendingDeletions();
 
-		contentEl.createEl("h2", { text: "VaultBridge: Review Held Deletions" });
+		contentEl.createEl("h2", { text: "Review held deletions" });
 
 		if (pending.length === 0) {
 			contentEl.createEl("p", {
@@ -121,7 +113,7 @@ export class DeletionReviewModal extends Modal {
 				cls: `vaultbridge-filter-pill ${this.activeFilter === f.id ? "mod-active" : ""}`,
 				text: `${f.label} (${f.count})`,
 			});
-			this.pillElements.push(pill);
+			this.pills.push({ id: f.id, el: pill });
 			pill.addEventListener("click", () => {
 				this.activeFilter = f.id;
 				this.renderListSection(pending);
@@ -173,17 +165,9 @@ export class DeletionReviewModal extends Modal {
 		this.dynamicContainer.empty();
 
 		// Update active pills
-		for (const p of this.pillElements) {
-			const text = (p as any).text ?? p.textContent ?? "";
-			if (
-				(this.activeFilter === "all" && text.startsWith("All")) ||
-				(this.activeFilter === "server" && text.startsWith("Server")) ||
-				(this.activeFilter === "local" && text.startsWith("Local"))
-			) {
-				p.addClass("mod-active");
-			} else {
-				p.removeClass("mod-active");
-			}
+		for (const { id, el } of this.pills) {
+			if (id === this.activeFilter) el.addClass("mod-active");
+			else el.removeClass("mod-active");
 		}
 
 		const filtered = this.getFilteredActions(pending);
@@ -283,129 +267,6 @@ export class DeletionReviewModal extends Modal {
 			// Fallback
 		}
 		new Notice(`Clipboard copy unavailable.`);
-	}
-
-	onClose(): void {
-		const { contentEl } = this;
-		contentEl.empty();
-	}
-}
-
-/**
- * Modal to confirm intentional deletion of a file or folder from both Obsidian and remote cloud storage.
- */
-export class DirectDeleteConfirmModal extends Modal {
-	private file: TAbstractFile;
-	private options: DirectDeleteOptions;
-
-	constructor(app: App, file: TAbstractFile, options: DirectDeleteOptions) {
-		super(app);
-		this.file = file;
-		this.options = options;
-	}
-
-	onOpen(): void {
-		const { contentEl } = this;
-		contentEl.empty();
-
-		const isFolder = this.file instanceof TFolder;
-		const itemType = isFolder ? "folder" : "file";
-		const { displayName } = this.options;
-
-		contentEl.createEl("h2", {
-			text: `Delete from vault & ${displayName}`,
-		});
-
-		contentEl.createEl("p", {
-			text: `Are you sure you want to permanently delete the ${itemType} "${this.file.path}" from both your local vault and ${displayName}?`,
-		});
-
-		if (isFolder) {
-			contentEl.createEl("p", {
-				text: "⚠️ All files and subfolders inside this directory will be permanently removed from cloud storage as well.",
-				cls: "mod-warning",
-			});
-		}
-
-		new Setting(contentEl)
-			.addButton((btn) => {
-				btn
-					.setButtonText("Delete permanently")
-					.setWarning()
-					.onClick(async () => {
-						this.close();
-						await this.executeDirectDelete();
-					});
-			})
-			.addButton((btn) => {
-				btn.setButtonText("Cancel").onClick(() => {
-					this.close();
-				});
-			});
-	}
-
-	private async executeDirectDelete(): Promise<void> {
-		const { remoteFs, orchestrator, displayName, onDeleted } = this.options;
-		const path = this.file.path;
-		const name = this.file.name || this.file.path.split("/").pop() || "item";
-		const isFolder = this.file instanceof TFolder;
-
-		new Notice(`Deleting "${name}" from Vault and ${displayName}...`);
-
-		try {
-			// 1. Delete on remote cloud storage (Google Drive/OneDrive/Dropbox)
-			await remoteFs.delete(path);
-			if (isFolder) {
-				await (remoteFs as any).cacheMutex?.run?.(() => {
-					const cache = (remoteFs as any).cache;
-					if (cache) {
-						const prefix = `${path}/`;
-						for (const [p] of cache.entries()) {
-							if (p.startsWith(prefix)) {
-								cache.removeEntry(p);
-								(remoteFs as any).touchedPaths?.add(p);
-							}
-						}
-					}
-				});
-			}
-			await remoteFs.checkpoint?.commitCheckpoint();
-
-			// 2. Clean up sync baseline store if orchestrator is provided
-			if (orchestrator?.state) {
-				if (isFolder) {
-					const allRecords = await orchestrator.state.getAll();
-					for (const rec of allRecords) {
-						if (rec.path === path || rec.path.startsWith(`${path}/`)) {
-							await orchestrator.state.delete(rec.path);
-						}
-					}
-				} else {
-					await orchestrator.state.delete(path);
-				}
-			}
-
-			// 3. Delete in Obsidian vault
-			(this.app as any).__vaultbridge_suppress_trash_modal = true;
-			try {
-				// eslint-disable-next-line obsidianmd/prefer-file-manager-trash-file -- intentional permanent delete
-				await this.app.vault.delete(this.file, true);
-			} finally {
-				delete (this.app as any).__vaultbridge_suppress_trash_modal;
-			}
-
-			new Notice(`Successfully deleted "${name}" from Vault and ${displayName}.`);
-			onDeleted?.();
-
-			// 4. Settle sync
-			if (orchestrator) {
-				void orchestrator.runSync();
-			}
-		} catch (err) {
-			new Notice(
-				`Error deleting "${name}": ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
 	}
 
 	onClose(): void {

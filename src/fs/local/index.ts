@@ -4,6 +4,7 @@ import type { FileEntity } from "../types";
 import { sha256 } from "../../utils/hash";
 import { normalizeSyncPath, validateRename, isDotPrefixed } from "../../utils/path";
 import { DotPathAdapter } from "./dot-path-adapter";
+import { withTrashModalSuppressed } from "../../utils/trash-suppression";
 
 /** IFileSystem implementation backed by an Obsidian Vault */
 export class LocalFs implements IFileSystem {
@@ -189,12 +190,8 @@ export class LocalFs implements IFileSystem {
 		}
 		const file = this.vault.getAbstractFileByPath(path);
 		if (file) {
-			(this.app as any).__vaultbridge_suppress_trash_modal = true;
-			try {
-				await this.app.fileManager.trashFile(file);
-			} finally {
-				delete (this.app as any).__vaultbridge_suppress_trash_modal;
-			}
+			// A sync deletion, not a user action: bypass the delete-confirmation hook.
+			await withTrashModalSuppressed(() => this.app.fileManager.trashFile(file));
 			// Verify if the file/folder was actually deleted. On some platforms (like mobile
 			// when "System trash" is selected), trashFile can silently no-op.
 			// Fall back to a permanent delete in that case.

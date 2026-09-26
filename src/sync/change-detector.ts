@@ -5,6 +5,7 @@ import type { TrackerSnapshot } from "./local-tracker";
 import { hasChanged, hasRemoteChanged } from "./change-compare";
 import { sha256, digest, isLocallyComputable } from "../utils/hash";
 import { AsyncPool } from "../queue/async-queue";
+import { confirmLocalDeletions, confirmRemoteDeletions } from "./deletion-confirmation";
 
 export interface ChangeSet {
 	entries: MixedEntity[];
@@ -382,69 +383,6 @@ export async function enrichHashesForRenames(
 				// Skip — rename optimizer falls back to push+delete
 			}
 		})
-	);
-}
-
-/**
- * Confirm warm-mode local deletions against the authoritative filesystem.
- * A baseline path absent from localFs.list() (the in-memory vault index) but
- * present on disk was simply not indexed — it was NOT deleted. Re-stat each such
- * candidate; if it exists, set entry.local so an incomplete listing cannot drive
- * an erroneous delete_remote. (When the remote is also gone, the file is then
- * compared as a genuine remote deletion rather than a no-op cleanup.)
- */
-async function confirmLocalDeletions(
-	entries: MixedEntity[],
-	localFs: IFileSystem,
-): Promise<void> {
-	const candidates = entries.filter((e) => !e.local && e.prevSync);
-	if (candidates.length === 0) return;
-
-	const pool = new AsyncPool(10);
-	await Promise.all(
-		candidates.map((entry) =>
-			pool.run(async () => {
-				try {
-					const stat = await localFs.stat(entry.path);
-					if (stat) {
-						entry.local = stat;
-					}
-				} catch {
-					// Skip — a genuinely missing file returns null/throws → stays a deletion
-				}
-			})
-		)
-	);
-}
-
-/**
- * Confirm cold-mode remote deletions against the authoritative remote filesystem.
- * A baseline path absent from remoteFs.list() but still present on the remote was
- * simply missing from the listing (truncated scan, post-error cursor stale, etc.) —
- * it was NOT deleted. Re-stat each such candidate; if the remote file exists, set
- * entry.remote so an incomplete listing cannot drive an erroneous delete_local.
- */
-async function confirmRemoteDeletions(
-	entries: MixedEntity[],
-	remoteFs: IFileSystem,
-): Promise<void> {
-	const candidates = entries.filter((e) => !e.remote && e.prevSync);
-	if (candidates.length === 0) return;
-
-	const pool = new AsyncPool(10);
-	await Promise.all(
-		candidates.map((entry) =>
-			pool.run(async () => {
-				try {
-					const stat = await remoteFs.stat(entry.path);
-					if (stat) {
-						entry.remote = stat;
-					}
-				} catch {
-					// Skip — a genuinely missing remote file returns null/throws → stays a deletion
-				}
-			})
-		)
 	);
 }
 

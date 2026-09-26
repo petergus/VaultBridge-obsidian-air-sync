@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-// `?raw` gives main.ts's source text without booting the Obsidian Plugin runtime.
-import mainSource from "./main.ts?raw";
+// `?raw` gives commands.ts's source text without booting the Obsidian Plugin runtime.
+import commandsSource from "./commands.ts?raw";
 
 /**
  * Command-ID immutability (CLAUDE.md: "Command IDs are immutable once
@@ -22,7 +22,7 @@ function registeredCommandIds(source: string): string[] {
 
 describe("published command IDs are stable", () => {
 	it("registers exactly the known command IDs", () => {
-		const ids = registeredCommandIds(mainSource);
+		const ids = registeredCommandIds(commandsSource);
 		// Guard against the regex silently matching nothing (e.g. commands moved
 		// behind a helper wrapper) and the snapshot degrading to a vacuous pass.
 		expect(ids.length).toBeGreaterThan(0);

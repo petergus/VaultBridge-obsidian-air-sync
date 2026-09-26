@@ -1,8 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { groupPendingDeletions, DeletionReviewModal, DirectDeleteConfirmModal } from "./deletion-modal";
+import type { App } from "obsidian";
+import { groupPendingDeletions, DeletionReviewModal } from "./deletion-modal";
 import { VaultBridgeSettingTab } from "./settings";
+import type VaultBridgePlugin from "../main";
+import type { SyncOrchestrator } from "../sync/orchestrator";
 import type { SyncAction } from "../sync/types";
-import { __ui, Notice, TFile, TFolder } from "../__mocks__/obsidian";
+import { __ui, Notice } from "../__mocks__/obsidian";
+import type { FakeEl } from "../__mocks__/obsidian";
+
+const app = {} as App;
+
+/** The review modal only calls these two orchestrator methods. */
+function reviewOrchestrator(
+	pending: SyncAction[],
+	approve: (actions?: readonly SyncAction[]) => Promise<void> = vi.fn(),
+): SyncOrchestrator {
+	return {
+		getPendingDeletions: vi.fn().mockReturnValue(pending),
+		approvePendingDeletions: approve,
+	} as unknown as SyncOrchestrator;
+}
+
+/** The mocked `contentEl` is a FakeEl (see __mocks__/obsidian.ts). */
+function contentOf(modal: DeletionReviewModal): FakeEl {
+	return modal.contentEl as unknown as FakeEl;
+}
 
 describe("groupPendingDeletions", () => {
 	it("groups paths by first two directory segments", () => {
@@ -28,12 +50,7 @@ describe("DeletionReviewModal", () => {
 	});
 
 	it("renders empty state when no deletions are pending", () => {
-		const mockOrchestrator = {
-			getPendingDeletions: vi.fn().mockReturnValue([]),
-			approvePendingDeletions: vi.fn(),
-		};
-
-		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		const modal = new DeletionReviewModal(app, reviewOrchestrator([]));
 		modal.open();
 
 		expect(__ui.buttons.length).toBe(1);
@@ -47,12 +64,7 @@ describe("DeletionReviewModal", () => {
 
 		const approveSpy = vi.fn().mockResolvedValue(undefined);
 		const onApprovedSpy = vi.fn();
-		const mockOrchestrator = {
-			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
-			approvePendingDeletions: approveSpy,
-		};
-
-		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any, onApprovedSpy);
+		const modal = new DeletionReviewModal(app, reviewOrchestrator(pendingActions, approveSpy), onApprovedSpy);
 		modal.open();
 
 		// Buttons: Approve all deletions and Decide later
@@ -71,17 +83,11 @@ describe("DeletionReviewModal", () => {
 		];
 
 		const approveSpy = vi.fn().mockResolvedValue(undefined);
-		const mockOrchestrator = {
-			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
-			approvePendingDeletions: approveSpy,
-		};
-
-		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		const modal = new DeletionReviewModal(app, reviewOrchestrator(pendingActions, approveSpy));
 		modal.open();
 
 		// Content should include both server and local deletion details
-		const contentEl = modal.contentEl as any;
-		expect(contentEl.children.length).toBeGreaterThan(0);
+		expect(contentOf(modal).children.length).toBeGreaterThan(0);
 
 		// Trigger approve
 		expect(__ui.buttons.length).toBe(2);
@@ -97,21 +103,16 @@ describe("DeletionReviewModal", () => {
 		];
 
 		const approveSpy = vi.fn().mockResolvedValue(undefined);
-		const mockOrchestrator = {
-			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
-			approvePendingDeletions: approveSpy,
-		};
-
-		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		const modal = new DeletionReviewModal(app, reviewOrchestrator(pendingActions, approveSpy));
 		modal.open();
 
 		// Click Server filter pill
-		const serverPill = (modal as any).pillElements.find((p: any) =>
-			(p.text || "").startsWith("Server")
-		);
+		const serverPill = contentOf(modal)
+			.querySelectorAll(".vaultbridge-filter-pill")
+			.find((p) => p.text.startsWith("Server"));
 		expect(serverPill).toBeDefined();
 		__ui.buttons = [];
-		serverPill.trigger("click");
+		serverPill!.trigger("click");
 
 		// When filtered to Server deletions (2 items out of 3), approve displayed and approve all should be rendered
 		expect(__ui.buttons.length).toBe(3);
@@ -131,18 +132,13 @@ describe("DeletionReviewModal", () => {
 		];
 
 		const approveSpy = vi.fn().mockResolvedValue(undefined);
-		const mockOrchestrator = {
-			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
-			approvePendingDeletions: approveSpy,
-		};
-
-		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		const modal = new DeletionReviewModal(app, reviewOrchestrator(pendingActions, approveSpy));
 		modal.open();
 
-		const searchInput = modal.contentEl.querySelector(".vaultbridge-deletion-search-input") as any;
-		expect(searchInput).toBeDefined();
+		const searchInput = contentOf(modal).querySelector(".vaultbridge-deletion-search-input");
+		expect(searchInput).not.toBeNull();
 		__ui.buttons = [];
-		searchInput.trigger("input", { target: { value: "my-note" } });
+		searchInput!.trigger("input", { target: { value: "my-note" } });
 
 		// Filtered down to 1 item
 		expect(__ui.buttons.length).toBe(3);
@@ -158,22 +154,19 @@ describe("DeletionReviewModal", () => {
 			{ path: "note2.md", action: "delete_local" },
 		];
 
-		const mockOrchestrator = {
-			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
-			approvePendingDeletions: vi.fn(),
-		};
+		const orchestrator = reviewOrchestrator(pendingActions);
 
 		const writeTextMock = vi.fn().mockResolvedValue(undefined);
 		Object.assign(navigator, {
 			clipboard: { writeText: writeTextMock },
 		});
 
-		const modal = new DeletionReviewModal({} as any, mockOrchestrator as any);
+		const modal = new DeletionReviewModal(app, orchestrator);
 		modal.open();
 
-		const copyBtn = modal.contentEl.querySelector(".vaultbridge-copy-btn") as any;
-		expect(copyBtn).toBeDefined();
-		copyBtn.trigger("click");
+		const copyBtn = contentOf(modal).querySelector(".vaultbridge-copy-btn");
+		expect(copyBtn).not.toBeNull();
+		copyBtn!.trigger("click");
 
 		// Give promise a tick
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -184,104 +177,6 @@ describe("DeletionReviewModal", () => {
 	});
 });
 
-describe("DirectDeleteConfirmModal", () => {
-	beforeEach(() => {
-		__ui.buttons = [];
-		__ui.lastModal = null;
-		Notice.lastNotice = null;
-	});
-
-	it("executes remote and local deletion on confirm for a file", async () => {
-		const mockFile = new TFile("test-folder/note.md", 100, 1000);
-		const remoteDeleteSpy = vi.fn().mockResolvedValue(undefined);
-		const localVaultDeleteSpy = vi.fn().mockResolvedValue(undefined);
-		const stateDeleteSpy = vi.fn().mockResolvedValue(undefined);
-		const runSyncSpy = vi.fn().mockResolvedValue(undefined);
-		const onDeletedSpy = vi.fn();
-
-		const mockApp = {
-			vault: {
-				delete: localVaultDeleteSpy,
-			},
-		};
-
-		const mockOrchestrator = {
-			state: {
-				delete: stateDeleteSpy,
-			},
-			runSync: runSyncSpy,
-		};
-
-		const mockRemoteFs = {
-			delete: remoteDeleteSpy,
-		};
-
-		const modal = new DirectDeleteConfirmModal(mockApp as any, mockFile as any, {
-			remoteFs: mockRemoteFs as any,
-			orchestrator: mockOrchestrator as any,
-			displayName: "Google Drive",
-			onDeleted: onDeletedSpy,
-		});
-
-		modal.open();
-
-		// Click confirm button
-		expect(__ui.buttons.length).toBe(2);
-		await __ui.buttons[0]!.click();
-
-		expect(remoteDeleteSpy).toHaveBeenCalledWith("test-folder/note.md");
-		expect(stateDeleteSpy).toHaveBeenCalledWith("test-folder/note.md");
-		expect(localVaultDeleteSpy).toHaveBeenCalledWith(mockFile, true);
-		expect(onDeletedSpy).toHaveBeenCalledTimes(1);
-		expect(Notice.lastNotice).toContain('Successfully deleted "note.md" from Vault and Google Drive');
-	});
-
-	it("cleans up child sync records when deleting a folder", async () => {
-		const mockFolder = new TFolder("test-folder");
-		const remoteDeleteSpy = vi.fn().mockResolvedValue(undefined);
-		const localVaultDeleteSpy = vi.fn().mockResolvedValue(undefined);
-		const stateDeleteSpy = vi.fn().mockResolvedValue(undefined);
-		const stateGetAllSpy = vi.fn().mockResolvedValue([
-			{ path: "test-folder/sub/a.md" },
-			{ path: "other-folder/b.md" },
-			{ path: "test-folder" },
-		]);
-
-		const mockApp = {
-			vault: {
-				delete: localVaultDeleteSpy,
-			},
-		};
-
-		const mockOrchestrator = {
-			state: {
-				getAll: stateGetAllSpy,
-				delete: stateDeleteSpy,
-			},
-			runSync: vi.fn(),
-		};
-
-		const mockRemoteFs = {
-			delete: remoteDeleteSpy,
-		};
-
-		const modal = new DirectDeleteConfirmModal(mockApp as any, mockFolder as any, {
-			remoteFs: mockRemoteFs as any,
-			orchestrator: mockOrchestrator as any,
-			displayName: "Google Drive",
-		});
-
-		modal.open();
-		await __ui.buttons[0]!.click();
-
-		expect(remoteDeleteSpy).toHaveBeenCalledWith("test-folder");
-		expect(stateDeleteSpy).toHaveBeenCalledWith("test-folder/sub/a.md");
-		expect(stateDeleteSpy).toHaveBeenCalledWith("test-folder");
-		expect(stateDeleteSpy).not.toHaveBeenCalledWith("other-folder/b.md");
-		expect(localVaultDeleteSpy).toHaveBeenCalledWith(mockFolder, true);
-	});
-});
-
 describe("VaultBridgeSettingTab - Held Deletions", () => {
 	beforeEach(() => {
 		__ui.buttons = [];
@@ -289,7 +184,7 @@ describe("VaultBridgeSettingTab - Held Deletions", () => {
 		Notice.lastNotice = null;
 	});
 
-	it("renders held deletions alert in settings when deletions are pending", () => {
+	it("renders held deletions alert in settings when deletions are pending", async () => {
 		const pendingActions: SyncAction[] = [
 			{ path: "remote1.md", action: "delete_remote" },
 			{ path: "local1.md", action: "delete_local" },
@@ -298,7 +193,7 @@ describe("VaultBridgeSettingTab - Held Deletions", () => {
 		const mockPlugin = {
 			app: {
 				vault: {
-					configDir: ".obsidian",
+					configDir: ".cfg",
 				},
 			},
 			orchestrator: {
@@ -335,7 +230,10 @@ describe("VaultBridgeSettingTab - Held Deletions", () => {
 			openDeletionReviewModal: vi.fn(),
 		};
 
-		const settingTab = new VaultBridgeSettingTab({ vault: { configDir: ".obsidian" } } as any, mockPlugin as any);
+		const settingTab = new VaultBridgeSettingTab(
+			{ vault: { configDir: ".cfg" } } as unknown as App,
+			mockPlugin as unknown as VaultBridgePlugin,
+		);
 		settingTab.renderContent();
 
 		// Buttons: Review deletions, Approve all, Sync now, Rescan
@@ -343,7 +241,7 @@ describe("VaultBridgeSettingTab - Held Deletions", () => {
 		expect(reviewBtn).toBeDefined();
 
 		// Click review deletions
-		reviewBtn!.click();
+		await reviewBtn!.click();
 		expect(mockPlugin.openDeletionReviewModal).toHaveBeenCalledTimes(1);
 	});
 });

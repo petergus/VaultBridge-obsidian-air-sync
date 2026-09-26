@@ -233,8 +233,31 @@ export default tseslint.config(
 		rules: { "max-lines": ["error", { max: 337, skipBlankLines: true, skipComments: true }] },
 	},
 	{
+		// The sync-cycle coordinator: the runSync coalescing loop, the retry/abort policy,
+		// and the one-cycle pipeline (detect → plan → refine → gate → execute → commit).
+		// The separable concepts were lifted out — the permanent-failure quarantine
+		// (failed-action-tracker.ts), held-deletion state (held-deletions.ts), the
+		// file-open priority pull (pull-single.ts) and the scope policy (sync-scope.ts);
+		// what remains is one pipeline. Re-pinned 339 → 426 after those extractions.
 		files: ["src/sync/orchestrator.ts"],
-		rules: { "max-lines": ["error", { max: 339, skipBlankLines: true, skipComments: true }] },
+		rules: { "max-lines": ["error", { max: 426, skipBlankLines: true, skipComments: true }] },
+	},
+	{
+		// The connection lifecycle state machine: every flow (init, connect, folder
+		// binding, disconnect, switch) shares the private `connecting` guard and the
+		// remote-FS handle, so splitting flows out would only thread that state through
+		// a context object. The shared rebind sequence is one helper (rebindRemoteFolder);
+		// the auth + folder-pick callback already lives in backend-auth-folder-pick.ts.
+		files: ["src/fs/backend-manager.ts"],
+		rules: { "max-lines": ["error", { max: 352, skipBlankLines: true, skipComments: true }] },
+	},
+	{
+		// The shared id-addressed remote FS base: path↔id cache, three-phase cache
+		// mutations, and the IncrementalCheckpoint lifecycle (ADR 0001), all over the same
+		// private cache/cursor/touched-paths state. The pure pieces live elsewhere
+		// (id-delta.ts: delta apply + full-scan diff; fs/errors.ts: not-found detection).
+		files: ["src/fs/caching/remote-fs.ts"],
+		rules: { "max-lines": ["error", { max: 316, skipBlankLines: true, skipComments: true }] },
 	},
 	{
 		// The phased (lane, tier) plan executor + its bounded action-I/O retry. The

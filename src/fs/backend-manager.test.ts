@@ -242,13 +242,15 @@ describe("BackendManager — identity change triggers clearSyncBaseline", () => 
 
 	it("resolves provider from registry on disconnect if not previously initialized", async () => {
 		const settings = mockSettings();
+		const disconnect = vi.fn().mockResolvedValue({});
+		fakeProvider.disconnect = disconnect;
 		const deps = createDeps(settings);
 		const mgr = new BackendManager(deps);
 
 		// Note: initBackend() is NOT called before disconnectBackend()
 		await mgr.disconnectBackend();
 
-		expect(fakeProvider.disconnect).toHaveBeenCalled();
+		expect(disconnect).toHaveBeenCalled();
 		expect(deps.onDisconnected).toHaveBeenCalled();
 		expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining("Disconnected from Test"));
 	});
@@ -272,10 +274,11 @@ describe("BackendManager — identity change triggers clearSyncBaseline", () => 
 		const deps = createDeps(settings);
 		const mgr = new BackendManager(deps);
 
-		fakeProvider.auth.completeAuth = vi.fn().mockResolvedValue({});
+		const completeAuth = vi.fn().mockResolvedValue({});
+		fakeProvider.auth.completeAuth = completeAuth;
 		await mgr.completeBackendConnect("auth-code");
 
-		expect(fakeProvider.auth.completeAuth).toHaveBeenCalledWith("auth-code", settings.backendData);
+		expect(completeAuth).toHaveBeenCalledWith("auth-code", settings.backendData);
 	});
 });
 

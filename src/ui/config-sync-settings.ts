@@ -1,6 +1,6 @@
 import { Setting } from "obsidian";
 import type VaultBridgePlugin from "../main";
-import { getConfigSyncIgnorePatterns } from "../config-sync";
+import { getInjectedIgnorePatterns } from "../config-sync";
 
 interface ConfigSubtreeSetting {
 	key:
@@ -118,7 +118,7 @@ function renderInjectedPatterns(
 	const description = createFragment();
 	description.appendText("Added automatically to the top of your Ignore patterns above:");
 	description.createEl("pre", {
-		text: getConfigSyncIgnorePatterns(
+		text: getInjectedIgnorePatterns(
 			plugin.settings,
 			configDir,
 			plugin.manifest.id,

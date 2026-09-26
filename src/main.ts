@@ -17,6 +17,8 @@ import { ConflictTracker } from "./sync/conflict-tracker";
 import { handleOAuthProtocolCallback } from "./fs/oauth-callback-error";
 import { registerContextMenuHandlers } from "./ui/context-menu";
 import { DeletionReviewModal } from "./ui/deletion-modal";
+import { renderStatusBar } from "./ui/status-bar";
+import { registerCommands } from "./commands";
 
 export default class VaultBridgePlugin extends Plugin {
 	settings!: VaultBridgeSettings;
@@ -189,71 +191,7 @@ export default class VaultBridgePlugin extends Plugin {
 		// Initialize backend if configured
 		await this.backendManager.initBackend();
 
-		// Commands
-		this.addCommand({
-			id: "sync-now",
-			name: "Sync now",
-			callback: () => {
-				void this.runSync();
-			},
-		});
-		this.addCommand({
-			id: "rescan-vault",
-			name: "Rescan vault (full reconcile)",
-			callback: () => {
-				void this.rescan();
-			},
-		});
-		this.addCommand({
-			id: "approve-held-deletions",
-			name: "Approve held deletions",
-			callback: () => {
-				const count = this.orchestrator.getPendingDeletions().length;
-				if (count === 0) {
-					new Notice("No deletions are waiting for approval");
-					return;
-				}
-				new Notice(`Applying ${count} held deletions`);
-				void this.orchestrator.approvePendingDeletions();
-			},
-		});
-		this.addCommand({
-			id: "review-held-deletions",
-			name: "Review held deletions",
-			callback: () => {
-				this.openDeletionReviewModal();
-			},
-		});
-		this.addCommand({
-			id: "open-active-file-in-remote",
-			name: "Open active file in Google Drive",
-			callback: async () => {
-				const activeFile = this.app.workspace.getActiveFile();
-				if (!activeFile) {
-					new Notice("No active file to open");
-					return;
-				}
-				const provider = this.backendManager.getBackendProvider();
-				const remoteFs = this.backendManager.getRemoteFs();
-				if (!provider || !remoteFs?.getWebUrl) {
-					new Notice("Remote storage is not connected");
-					return;
-				}
-				const displayName = provider.displayName.toLowerCase().includes("google drive")
-					? "Google Drive"
-					: provider.displayName;
-				try {
-					const url = await remoteFs.getWebUrl(activeFile.path);
-					if (url) {
-						window.open(url);
-					} else {
-						new Notice(`"${activeFile.name}" is not yet synced to ${displayName}`);
-					}
-				} catch {
-					new Notice(`Failed to open "${activeFile.name}" in ${displayName}`);
-				}
-			},
-		});
+		registerCommands(this);
 
 		// Status bar: a clickable cloud icon triggers a manual sync, with the
 		// sync status shown as text beside it.
@@ -291,7 +229,7 @@ export default class VaultBridgePlugin extends Plugin {
 			backendManager: this.backendManager,
 			orchestrator: this.orchestrator,
 			registerEvent: (ref) => this.registerEvent(ref),
-			registerDomEvent: (el, type, cb, options) => this.registerDomEvent(el as any, type as any, cb, options),
+			registerDomEvent: (el, type, cb, options) => this.registerDomEvent(el, type, cb, options),
 			registerCleanup: (cb) => this.register(cb),
 		});
 
@@ -415,31 +353,6 @@ export default class VaultBridgePlugin extends Plugin {
 
 	private updateStatusBar(): void {
 		if (!this.statusBarEl) return;
-		const pendingCount = this.orchestrator?.getPendingDeletions().length ?? 0;
-		if (pendingCount > 0) {
-			this.statusBarEl.setText(`⚠️ ${pendingCount} held deletion${pendingCount === 1 ? "" : "s"}`);
-			this.statusBarEl.addClass("mod-clickable");
-			setTooltip(this.statusBarEl, "Click to review held deletions", { placement: "top" });
-			return;
-		}
-		this.statusBarEl.removeClass("mod-clickable");
-		setTooltip(this.statusBarEl, "", { placement: "top" });
-		switch (this.syncStatus) {
-			case "idle":
-				this.statusBarEl.setText("Synced");
-				break;
-			case "syncing":
-				this.statusBarEl.setText("Syncing...");
-				break;
-			case "error":
-				this.statusBarEl.setText("Sync error");
-				break;
-			case "partial_error":
-				this.statusBarEl.setText("Synced (with errors)");
-				break;
-			case "not_connected":
-				this.statusBarEl.setText("Not connected");
-				break;
-		}
+		renderStatusBar(this.statusBarEl, this.syncStatus, this.orchestrator?.getPendingDeletions().length ?? 0);
 	}
 }
