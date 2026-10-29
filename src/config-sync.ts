@@ -24,6 +24,16 @@ function escapeGlobChars(segment: string): string {
  * additionally enforces it unconditionally via `isOwnPluginDataPath()` —
  * don't rely on this array alone to keep credentials from syncing.
  */
+const OWN_PLUGIN_ALIASES = ["vaultbridge-sync", "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"] as const;
+
+/**
+ * Portable bundle files inside VaultBridge's own plugin directory that MAY sync
+ * across devices when `syncConfigPlugins` is enabled. Every other file in the
+ * plugin's own folder (`data.json`, `data.json.bak`, token/secret backups, sourcemaps,
+ * debug artifacts) is device-local or sensitive and is unconditionally excluded.
+ */
+const OWN_PORTABLE_PLUGIN_FILES = new Set(["main.js", "manifest.json", "styles.css"]);
+
 export function getConfigSyncIgnorePatterns(
 	settings: VaultBridgeSettings,
 	configDir: string,
@@ -39,13 +49,19 @@ export function getConfigSyncIgnorePatterns(
 	const optionalPatterns = optionalSubtrees.flatMap(([subtree, enabled]) =>
 		enabled ? [`!${dir}/${subtree}`, `!${dir}/${subtree}/**`] : [],
 	);
-	const ownPluginIds = [pluginId, "vaultbridge-sync", "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"];
-	const uniqueOwnIds = Array.from(new Set(ownPluginIds));
-	// Only data.json (credentials, vaultId) is excluded. The plugin's code files
-	// (main.js, manifest.json, styles.css) sync like any other plugin's, so a build
-	// installed on one device reaches the others.
+	const uniqueOwnIds = Array.from(new Set([pluginId, ...OWN_PLUGIN_ALIASES]));
+	// Only the plugin's portable bundle files (main.js, manifest.json, styles.css)
+	// sync across devices; data.json, backups, and any local artifacts are excluded.
 	const ownExclusions = settings.syncConfigPlugins
-		? uniqueOwnIds.map((id) => `${dir}/plugins/${escapeGlobChars(id)}/data.json`)
+		? uniqueOwnIds.flatMap((id) => {
+			const pluginDir = `${dir}/plugins/${escapeGlobChars(id)}`;
+			return [
+				`${pluginDir}/**`,
+				`!${pluginDir}/main.js`,
+				`!${pluginDir}/manifest.json`,
+				`!${pluginDir}/styles.css`,
+			];
+		})
 		: [];
 
 	return [
@@ -85,18 +101,21 @@ export function getEffectiveIgnorePatterns(
 }
 
 /**
- * This plugin's own settings file under the vault's config directory. Checked
- * as an unconditional, non-overridable exclusion (see `isExcluded()`) rather
- * than relying solely on the ignore-pattern list above, since gitignore's
+ * Device-local or sensitive files inside this plugin's own folder under the
+ * vault's config directory (`data.json`, `data.json.bak`, secret backups, etc.).
+ * Checked as an unconditional, non-overridable exclusion (see `isExcluded()`)
+ * rather than relying solely on the ignore-pattern list above, since gitignore's
  * last-match-wins semantics would otherwise let a user's own `ignorePatterns`
  * entry (e.g. a broad `!**` or `!*.json`) silently un-ignore it and sync this
- * device's backend credentials/vaultId to another device.
+ * device's backend credentials, token backups, or vaultId to another device.
  */
 export function isOwnPluginDataPath(path: string, configDir: string, pluginId: string): boolean {
-	const ownPluginIds = new Set([pluginId, "vaultbridge-sync", "obsidian-vaultbridge", "vaultbridge", "obsidian-air-sync", "air-sync"]);
+	const ownPluginIds = new Set([pluginId, ...OWN_PLUGIN_ALIASES]);
 	for (const id of ownPluginIds) {
-		if (path === `${configDir}/plugins/${id}/data.json`) {
-			return true;
+		const prefix = `${configDir}/plugins/${id}/`;
+		if (path.startsWith(prefix)) {
+			const rel = path.slice(prefix.length);
+			return !OWN_PORTABLE_PLUGIN_FILES.has(rel);
 		}
 	}
 	return false;

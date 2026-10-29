@@ -61,15 +61,29 @@ export class BackendManager {
 		this.backendProvider = provider;
 
 		try {
-			// The last-synced identity is persisted in settings (not just in memory),
-			// so a backend/target change made across a reload — or a switch that
-			// skipped the in-session reset — is still detected here. The sync-state
-			// store is keyed by vaultId alone, so without this the new target would
-			// reuse the previous one's baselines: every local file "matches" (nothing
-			// uploads) and a later cold reconcile could even delete_local against the
-			// new, empty remote. getIdentity() is null until a folder is bound, so a
-			// transient null neither resets state nor overwrites the stored identity.
 			const newIdentity = provider.getIdentity(settings);
+
+			this.closeRemoteFs();
+			if (!provider.isConnected(settings)) {
+				this.remoteFs = null;
+				this.deps.onDisconnected();
+				// Only nag about expired auth when a target was actually bound. Use the
+				// backend-agnostic identity (computed above) instead of a Google Drive-specific
+				// settings field, so this layer stays free of any one backend's shape.
+				if (newIdentity) {
+					this.deps.notify("Authentication expired. Please reconnect in settings.");
+				}
+				return;
+			}
+
+			// The last-synced identity is persisted in settings (not just in memory),
+			// so a backend/target change made across a reload — or while disconnected —
+			// is detected once connected. The sync-state store is keyed by vaultId alone,
+			// so without this the new target would reuse the previous one's baselines:
+			// every local file "matches" (nothing uploads) and a later cold reconcile
+			// could even delete_local against the new, empty remote. Checked only once
+			// connected so editing a folder ID while disconnected does not prematurely
+			// wipe baselines before a connection succeeds.
 			const storedIdentity = settings.lastSyncedIdentity ?? "";
 			let identityChanged = false;
 			if (newIdentity && newIdentity !== storedIdentity) {
@@ -86,19 +100,6 @@ export class BackendManager {
 				}
 				settings.lastSyncedIdentity = newIdentity;
 				await this.deps.saveSettings();
-			}
-
-			this.closeRemoteFs();
-			if (!provider.isConnected(settings)) {
-				this.remoteFs = null;
-				this.deps.onDisconnected();
-				// Only nag about expired auth when a target was actually bound. Use the
-				// backend-agnostic identity (computed above) instead of a Google Drive-specific
-				// settings field, so this layer stays free of any one backend's shape.
-				if (newIdentity) {
-					this.deps.notify("Authentication expired. Please reconnect in settings.");
-				}
-				return;
 			}
 
 			this.remoteFs = provider.createFs(this.deps.getApp(), settings, this.deps.getLogger());
@@ -278,7 +279,7 @@ export class BackendManager {
 				picker: provider.picker,
 				logger: this.deps.getLogger(),
 				saveSettings: this.deps.saveSettings,
-				resetAll: () => this.resetAll(settings),
+				resetCheckpoint: () => this.resetCheckpoint(settings),
 				closeRemoteFs: () => this.closeRemoteFs(),
 				notify: this.deps.notify,
 			});
@@ -340,13 +341,29 @@ export class BackendManager {
 			settings.backendData = { ...backendData, ...updates };
 			await this.deps.saveSettings();
 
-			// Start cold on connect: a reconnect to a still-bound target (e.g. custom OAuth
-			// keeps its folder id across disconnect) must not silently resume against stale
-			// state. resetAll runs while the folder id is still in settings (see its doc).
-			await this.resetAll(settings);
+			// Always drop the remote checkpoint (delta cursor + metadata cache) so the
+			// first sync after (re-)auth runs a cold scan against the remote rather than
+			// trusting a pre-auth cursor. SyncRecord baselines are ONLY cleared when
+			// binding to a DIFFERENT remote identity than lastSyncedIdentity — reconnecting
+			// or re-authenticating to the same target preserves baselines so offline edits
+			// push cleanly and 3-way merge retains its base snapshots.
+			await this.resetCheckpoint(settings);
 
-			// Close any FS from a prior connection before rebuilding — resetAll may have
-			// used its open connection, so reassigning without closing would leak it.
+			const newIdentity = provider.getIdentity(settings);
+			const storedIdentity = settings.lastSyncedIdentity ?? "";
+			const identityChanged = Boolean(
+				newIdentity && storedIdentity && newIdentity !== storedIdentity,
+			);
+			if (identityChanged) {
+				this.deps.getLogger().info("Backend identity changed", {
+					from: storedIdentity,
+					to: newIdentity,
+				});
+				await this.deps.clearSyncBaseline();
+			}
+
+			// Close any FS from a prior connection before rebuilding — resetCheckpoint may
+			// have used its open connection, so reassigning without closing would leak it.
 			this.closeRemoteFs();
 
 			// No remote-vault binding here: after auth the user picks the folder
@@ -358,11 +375,14 @@ export class BackendManager {
 				this.deps.getLogger()
 			);
 			if (this.remoteFs) {
+				if (identityChanged) {
+					await this.remoteFs.checkpoint?.resetCheckpoint();
+				}
 				this.deps.onConnected(this.remoteFs);
 				// Record the synced identity now so a later same-session target change
 				// (e.g. editing the custom folder id) is detected by the next
 				// initBackend, which then resets the stale baselines.
-				settings.lastSyncedIdentity = provider.getIdentity(settings) ?? "";
+				settings.lastSyncedIdentity = newIdentity ?? "";
 				await this.deps.saveSettings();
 			}
 
@@ -395,18 +415,16 @@ export class BackendManager {
 	}
 
 	/**
-	 * Discard ALL of the current target's sync state so the next sync starts cold: the
-	 * checkpoint store (cursor + cache) AND the SyncRecord baseline. Used at the connect /
-	 * disconnect / switch boundaries (Rescan instead keeps the baseline, clearing only the
-	 * cursor, so the forced cold reconcile still has something to diff against). Run while
-	 * the folder id still keys the store — BEFORE backendData is wiped.
+	 * Discard the current target's remote checkpoint store (delta cursor + metadata
+	 * cache) so the next sync runs a cold scan against the remote, while keeping the
+	 * SyncRecord baseline intact. Run while the folder id still keys the store — BEFORE
+	 * backendData is wiped.
 	 *
 	 * Checkpoint clear prefers the LIVE FS (its single open connection is mutex-coordinated
 	 * with any in-flight cycle); with no live FS — e.g. an expired backend that never built
-	 * one — it clears by settings key instead. The checkpoint clear is best-effort (logged,
-	 * not thrown); the baseline clear, in contrast, propagates so a failure is surfaced.
+	 * one — it clears by settings key instead. Best-effort (logged, not thrown).
 	 */
-	private async resetAll(settings: VaultBridgeSettings): Promise<void> {
+	private async resetCheckpoint(settings: VaultBridgeSettings): Promise<void> {
 		if (this.remoteFs) {
 			await this.remoteFs.checkpoint?.resetCheckpoint().catch((e: unknown) => {
 				this.deps.getLogger().warn("Failed to clear checkpoint store", {
@@ -416,6 +434,19 @@ export class BackendManager {
 		} else {
 			await this.backendProvider?.clearCheckpointStore?.(settings);
 		}
+	}
+
+	/**
+	 * Discard ALL of the current target's sync state: both the remote checkpoint store
+	 * (cursor + cache) AND the SyncRecord baseline. Used on a full backend switch
+	 * (`switchBackend`), where the next connection is guaranteed to target a different
+	 * backend. Disconnect and reconnect instead call {@link resetCheckpoint} and keep
+	 * `lastSyncedIdentity` + SyncRecord baselines so reconnecting to the SAME folder
+	 * reconciles offline edits cleanly without false conflicts (while binding to a
+	 * DIFFERENT folder clears baselines via the identity-change check).
+	 */
+	private async resetAll(settings: VaultBridgeSettings): Promise<void> {
+		await this.resetCheckpoint(settings);
 		await this.deps.clearSyncBaseline();
 	}
 
@@ -434,19 +465,20 @@ export class BackendManager {
 		this.connecting = true;
 		this.deps.getLogger().info("Disconnecting backend", { backend: settings.backendType });
 		try {
-			// Discard this target's sync state so nothing stale survives a reconnect —
-			// before disconnect() resets backendData (resetAll keys the store off it).
+			// Clear the remote checkpoint store (cursor + cache) while backendData still
+			// keys it, so a later reconnect runs a cold scan. Keep SyncRecord baselines and
+			// lastSyncedIdentity intact: reconnecting to the SAME folder then reconciles
+			// offline edits without mass false conflicts, while connecting to a DIFFERENT
+			// folder detects `newIdentity !== lastSyncedIdentity` and clears baselines then.
 			try {
-				await this.resetAll(settings);
+				await this.resetCheckpoint(settings);
 			} catch (resetErr) {
-				this.deps.getLogger().warn("Failed to reset sync state during disconnect", {
+				this.deps.getLogger().warn("Failed to reset checkpoint during disconnect", {
 					error: resetErr instanceof Error ? resetErr.message : String(resetErr),
 				});
 			}
 
 			settings.backendData = await provider.disconnect(settings);
-			// Forget the synced identity so a later reconnect (to any target) starts clean.
-			settings.lastSyncedIdentity = "";
 			await this.deps.saveSettings();
 
 			this.deps.notify(`Disconnected from ${provider.displayName}`);

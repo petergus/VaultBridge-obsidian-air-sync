@@ -522,6 +522,23 @@ describe("GoogleAuthDirect.handleAuthCallback", () => {
 });
 
 describe("GoogleAuthDirect._refreshToken", () => {
+	it("reports Google's error code without leaking the response description", async () => {
+		const err = Object.assign(new Error("Request failed, status 400"), {
+			status: 400,
+			json: { error: "invalid_grant", error_description: "sensitive server detail" },
+		});
+		const mockRequestUrl = (await spyRequestUrl()).mockRejectedValue(err);
+		const { GoogleAuthDirect } = await import("./auth");
+		const auth = new GoogleAuthDirect({ clientId: "my-client", clientSecret: "my-secret" });
+		auth.setTokens("my-refresh", "", 0);
+
+		const failure = await auth.getAccessToken().catch((error: unknown) => error);
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toContain("Google OAuth error: invalid_grant");
+		expect((failure as Error).message).not.toContain("sensitive server detail");
+		mockRequestUrl.mockRestore();
+	});
+
 	it("refreshes directly against Google token endpoint", async () => {
 		const mockRequestUrl = (await spyRequestUrl()).mockResolvedValue(
 			mockRes({
@@ -551,6 +568,31 @@ describe("GoogleAuthDirect._refreshToken", () => {
 });
 
 describe("GoogleDriveCustomProvider.completeAuth", () => {
+	it("persists a refresh-token rotation on the newly connected shared auth", async () => {
+		const mockRequestUrl = (await spyRequestUrl())
+			.mockResolvedValueOnce(mockRes({ access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600 }))
+			.mockResolvedValueOnce(mockRes({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600 }));
+		const { GoogleDriveCustomProvider } = await import("./provider-custom");
+		const { GoogleAuthDirect } = await import("./auth");
+		const secretStore = createMockSecretStore({ cid: "cid-value", csecret: "csecret-value" });
+		const provider = new GoogleDriveCustomProvider(secretStore);
+		const authInternal = provider.auth as unknown as GoogleDriveCustomAuthProviderInternal;
+		authInternal.googleAuth = new GoogleAuthDirect({ clientId: "cid-value", clientSecret: "csecret-value" });
+		authInternal.googleAuth.setAuthState("csrf");
+		authInternal.googleAuth.setCodeVerifier("verifier");
+		const data = {
+			customClientId: "cid", customClientSecret: "csecret", remoteVaultFolderId: "",
+			accessTokenExpiry: 0, pendingAuthState: "", pendingFolderPickState: "",
+		};
+
+		await provider.auth.completeAuth("https://callback?code=code&state=csrf", data);
+		const shared = provider.auth.getOrCreateGoogleAuth(data);
+		await shared.getAccessToken(true);
+
+		expect(secretStore.getSecret("vaultbridge-googledrive-custom-refresh-token")).toBe("refresh-2");
+		mockRequestUrl.mockRestore();
+	});
+
 	it("exchanges code via GoogleAuthDirect with PKCE", async () => {
 		const mockRequestUrl = (await spyRequestUrl()).mockResolvedValue(
 			mockRes({

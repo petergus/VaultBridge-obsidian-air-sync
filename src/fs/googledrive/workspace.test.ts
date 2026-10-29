@@ -139,11 +139,12 @@ describe("Google Workspace types & helpers", () => {
 	});
 
 	describe("workspaceStubChecksum", () => {
-		it("returns an opaque checksum based on id and mimeType", () => {
+		it("returns a locally computable md5 checksum matching buildWorkspaceStubContent", async () => {
+			const { md5 } = await import("../../utils/md5");
 			const checksum = workspaceStubChecksum(docFile);
 			expect(checksum).toEqual({
-				algo: "opaque",
-				value: "workspace:doc-123:application/vnd.google-apps.document",
+				algo: "md5",
+				value: md5(buildWorkspaceStubContent(docFile)),
 			});
 		});
 	});
@@ -214,10 +215,8 @@ describe("GoogleDriveMetadataCache workspace handling", () => {
 		expect(entity.isDirectory).toBe(false);
 		expect(entity.size).toBe(expectedStub.byteLength);
 		expect(entity.mtime).toBe(new Date("2026-03-01T12:00:00.000Z").getTime());
-		expect(entity.remoteChecksum).toEqual({
-			algo: "opaque",
-			value: "workspace:doc1:application/vnd.google-apps.document",
-		});
+		expect(entity.remoteChecksum).toEqual(workspaceStubChecksum(doc, expectedStub));
+		expect(entity.remoteChecksum?.algo).toBe("md5");
 		expect(entity.backendMeta).toEqual({
 			googleDriveId: "doc1",
 			googleWorkspace: true,

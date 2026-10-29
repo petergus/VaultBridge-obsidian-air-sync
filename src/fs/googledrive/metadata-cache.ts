@@ -77,7 +77,7 @@ export class GoogleDriveMetadataCache extends AbstractMetadataCache<GoogleDriveF
 				size: stubContent.byteLength,
 				mtime: Number.isNaN(parsedMtime) ? 0 : parsedMtime,
 				hash: "",
-				remoteChecksum: workspaceStubChecksum(googleDriveFile),
+				remoteChecksum: workspaceStubChecksum(googleDriveFile, stubContent),
 				backendMeta: {
 					googleDriveId: googleDriveFile.id,
 					googleWorkspace: true,

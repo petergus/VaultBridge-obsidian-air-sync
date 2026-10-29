@@ -318,9 +318,23 @@ export class GoogleAuthDirect extends GoogleAuthBase {
 			await this.storeTokenResponse(token);
 			return this.accessToken;
 		} catch (err) {
+			const code = extractGoogleErrorCode(err);
+			if (code) {
+				const status = (err as { status?: number }).status;
+				this.handleRefreshError(Object.assign(new Error(`Google OAuth error: ${code}`), { status }));
+			}
 			this.handleRefreshError(err);
 		}
 	}
+}
+
+/** Keep Google's machine-readable error code while excluding response text and credentials. */
+function extractGoogleErrorCode(err: unknown): string | null {
+	if (!err || typeof err !== "object") return null;
+	const json = (err as { json?: unknown }).json;
+	if (!json || typeof json !== "object") return null;
+	const code = (json as { error?: unknown }).error;
+	return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : null;
 }
 
 /** Extract error detail from a Google OAuth error response */

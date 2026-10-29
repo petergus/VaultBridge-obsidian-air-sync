@@ -144,7 +144,7 @@ export abstract class GoogleDriveAuthProviderBase implements IAuthProvider {
 			if (!tokens.refreshToken) {
 				auth.setTokens(requiredRefresh, tokens.accessToken, tokens.accessTokenExpiry);
 			}
-			this.googleAuth = auth;
+			this.googleAuth = this.wireRefreshPersistence(auth);
 
 			return {
 				accessTokenExpiry: tokens.accessTokenExpiry,

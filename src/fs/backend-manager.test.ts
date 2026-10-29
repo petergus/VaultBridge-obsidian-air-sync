@@ -142,7 +142,7 @@ describe("BackendManager — identity change triggers clearSyncBaseline", () => 
 		expect(deps.clearSyncBaseline).not.toHaveBeenCalled();
 	});
 
-	it("calls clearSyncBaseline and resets identity on disconnect", async () => {
+	it("clears checkpoint on disconnect while preserving SyncRecord baselines and lastSyncedIdentity for same-folder reconnect", async () => {
 		const settings = mockSettings();
 		const deps = createDeps(settings);
 		const mgr = new BackendManager(deps);
@@ -150,16 +150,23 @@ describe("BackendManager — identity change triggers clearSyncBaseline", () => 
 		await mgr.initBackend();
 		await mgr.disconnectBackend();
 
-		expect(deps.clearSyncBaseline).toHaveBeenCalledTimes(1);
-		// The per-target checkpoint store (cursor + cache) is cleared via the live FS,
-		// so no stale checkpoint survives the disconnect (works for custom OAuth too).
+		// Baselines stay intact so reconnecting to the same folder reconciles offline
+		// edits cleanly instead of conflicting every locally modified file.
+		expect(deps.clearSyncBaseline).not.toHaveBeenCalled();
+		expect(settings.lastSyncedIdentity).toBe("test:folder-A");
+		// The per-target checkpoint store (cursor + cache) IS cleared via the live FS,
+		// so no stale delta cursor survives the disconnect.
 		expect(fakeResetCheckpoint).toHaveBeenCalledTimes(1);
 
-		// After disconnect, re-init should not trigger another callback
-		// (lastBackendIdentity was reset to null)
-		(deps.clearSyncBaseline as ReturnType<typeof vi.fn>).mockClear();
+		// Re-initializing against the SAME folder keeps baselines intact
 		await mgr.initBackend();
 		expect(deps.clearSyncBaseline).not.toHaveBeenCalled();
+
+		// Re-initializing against a DIFFERENT folder after disconnect DOES clear baselines
+		fakeProvider.getIdentity = () => "test:folder-B";
+		await mgr.initBackend();
+		expect(deps.clearSyncBaseline).toHaveBeenCalledTimes(1);
+		expect(settings.lastSyncedIdentity).toBe("test:folder-B");
 	});
 
 	it("clears the orphaned checkpoint store on disconnect when there is no live FS", async () => {
@@ -228,7 +235,7 @@ describe("BackendManager — identity change triggers clearSyncBaseline", () => 
 		expect(settings.lastSyncedIdentity).toBe("test:folder-A");
 	});
 
-	it("forgets the persisted identity on disconnect", async () => {
+	it("does not prematurely clear baselines or mutate lastSyncedIdentity while disconnected", async () => {
 		const settings = mockSettings();
 		const deps = createDeps(settings);
 		const mgr = new BackendManager(deps);
@@ -237,7 +244,15 @@ describe("BackendManager — identity change triggers clearSyncBaseline", () => 
 		expect(settings.lastSyncedIdentity).toBe("test:folder-A");
 
 		await mgr.disconnectBackend();
-		expect(settings.lastSyncedIdentity).toBe("");
+		expect(settings.lastSyncedIdentity).toBe("test:folder-A");
+
+		// Simulate editing the folder ID field in settings while still disconnected
+		fakeProvider.isConnected = () => false;
+		fakeProvider.getIdentity = () => "test:folder-TYPING";
+		await mgr.initBackend();
+
+		expect(deps.clearSyncBaseline).not.toHaveBeenCalled();
+		expect(settings.lastSyncedIdentity).toBe("test:folder-A");
 	});
 
 	it("resolves provider from registry on disconnect if not previously initialized", async () => {
@@ -480,16 +495,12 @@ describe("BackendManager — isConnected false with prior connection", () => {
 	});
 });
 
-describe("BackendManager — resetAll on connect (start cold)", () => {
-	it("completeBackendConnect resets both the baseline and the checkpoint so a connect starts cold", async () => {
-		// resetAll() runs at the connect boundary too (not just disconnect/switch): a
-		// reconnect to a still-bound target must never silently resume against a stale
-		// cursor/baseline. Both halves get cleared — SyncRecord baseline (clearSyncBaseline)
-		// and the checkpoint store (resetCheckpoint via the live FS).
+describe("BackendManager — checkpoint reset & baseline preservation on connect", () => {
+	it("completeBackendConnect resets the checkpoint (start cold) while preserving SyncRecord baselines on same-identity reconnect", async () => {
 		const settings = mockSettings();
 		const deps = createDeps(settings);
 		const mgr = new BackendManager(deps);
-		await mgr.initBackend(); // sets backendProvider + remoteFs = fakeFs
+		await mgr.initBackend(); // sets backendProvider + remoteFs = fakeFs + lastSyncedIdentity = "test:folder-A"
 		fakeProvider.auth.completeAuth = () => Promise.resolve({});
 		vi.mocked(deps.clearSyncBaseline).mockClear();
 		vi.mocked(deps.onConnected).mockClear();
@@ -497,13 +508,34 @@ describe("BackendManager — resetAll on connect (start cold)", () => {
 
 		await mgr.completeBackendConnect("auth-code");
 
-		expect(deps.clearSyncBaseline).toHaveBeenCalledTimes(1);
+		// Re-authenticating / reconnecting to the same folder keeps SyncRecord baselines
+		// (preventing mass false conflicts on offline edits) while resetting the delta cursor.
+		expect(deps.clearSyncBaseline).not.toHaveBeenCalled();
 		expect(fakeResetCheckpoint).toHaveBeenCalledTimes(1);
-		// The reset MUST run before the FS is rebuilt and handed to the orchestrator —
-		// otherwise it would wipe the freshly-built FS's checkpoint, not the prior binding's.
-		const resetOrder = vi.mocked(deps.clearSyncBaseline).mock.invocationCallOrder[0]!;
+		// The checkpoint reset MUST run before the FS is rebuilt and handed to the orchestrator.
+		const resetOrder = fakeResetCheckpoint.mock.invocationCallOrder[0]!;
 		const connectedOrder = vi.mocked(deps.onConnected).mock.invocationCallOrder[0]!;
 		expect(resetOrder).toBeLessThan(connectedOrder);
+	});
+
+	it("completeBackendConnect clears SyncRecord baselines when connecting to a DIFFERENT target identity", async () => {
+		const settings = mockSettings();
+		const deps = createDeps(settings);
+		const mgr = new BackendManager(deps);
+		await mgr.initBackend(); // lastSyncedIdentity = "test:folder-A"
+		await mgr.disconnectBackend();
+
+		// User changed custom folder ID to folder-B while disconnected, then connected
+		fakeProvider.getIdentity = () => "test:folder-B";
+		fakeProvider.auth.completeAuth = () => Promise.resolve({});
+		vi.mocked(deps.clearSyncBaseline).mockClear();
+		fakeResetCheckpoint.mockClear();
+
+		await mgr.completeBackendConnect("auth-code");
+
+		expect(deps.clearSyncBaseline).toHaveBeenCalledTimes(1);
+		expect(fakeResetCheckpoint).toHaveBeenCalled();
+		expect(settings.lastSyncedIdentity).toBe("test:folder-B");
 	});
 });
 

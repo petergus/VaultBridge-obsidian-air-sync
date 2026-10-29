@@ -152,21 +152,32 @@ describe("getConfigSyncIgnorePatterns", () => {
 
 		expect(matcher.ignores("!cfg/workspace.json")).toBe(true);
 		expect(matcher.ignores("!cfg/plugins/plugin[x]/data.json")).toBe(true);
-		// Only the credentials file is excluded; the plugin's own code files sync.
+		expect(matcher.ignores("!cfg/plugins/plugin[x]/data.json.bak")).toBe(true);
+		expect(matcher.ignores("!cfg/plugins/plugin[x]/secrets-restored-backup.json")).toBe(true);
+		// Only portable bundle files sync for our own plugin; other plugins sync normally.
 		expect(matcher.ignores("!cfg/plugins/plugin[x]/main.js")).toBe(false);
+		expect(matcher.ignores("!cfg/plugins/plugin[x]/manifest.json")).toBe(false);
+		expect(matcher.ignores("!cfg/plugins/plugin[x]/styles.css")).toBe(false);
 		expect(matcher.ignores("!cfg/plugins/other-plugin/data.json")).toBe(false);
 	});
 });
 
 describe("isOwnPluginDataPath", () => {
-	it("matches only this plugin's own data.json under the config directory", () => {
+	it("excludes all non-bundle files inside this plugin's own folder while allowing main.js, manifest.json, and styles.css", () => {
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/data.json.bak`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/secrets-restored-backup.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/main.js`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(false);
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/manifest.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(false);
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/${TEST_PLUGIN_ID}/styles.css`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(false);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/other-plugin/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(false);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/workspace.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(false);
 	});
 
-	it("matches vaultbridge and legacy air-sync data.json as well", () => {
+	it("matches vaultbridge and legacy air-sync plugin folders as well", () => {
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/vaultbridge-sync/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/vaultbridge-sync/secrets-restored-backup.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
+		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/vaultbridge-sync/main.js`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(false);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/vaultbridge/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/obsidian-vaultbridge/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);
 		expect(isOwnPluginDataPath(`${TEST_CONFIG_DIR}/plugins/air-sync/data.json`, TEST_CONFIG_DIR, TEST_PLUGIN_ID)).toBe(true);

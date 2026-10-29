@@ -76,6 +76,7 @@ The authorization code exchange is protected by PKCE — the code cannot be used
 - **Sync looks stuck or incomplete** (for example after Obsidian was closed mid-sync): Open **Settings → VaultBridge → Advanced** and click **Rescan**. It re-checks everything against your cloud storage and finishes any leftover work — comparing files rather than re-downloading what you already have, and keeping your sync history.
 - **Authentication completes but sync doesn't start**: Restart the plugin (disable → enable in Community plugins settings), then try syncing manually.
 - **Token error after successful authorization**: Check that the device has a stable network connection — token exchange requires connectivity immediately after authorization.
+- **Google Drive asks you to reconnect about every seven days**: For a custom OAuth client, check **Google Cloud Console → Google Auth Platform → Audience**. Google expires refresh tokens after seven days when an external app is in **Testing**. Publishing the app as **In production** changes that behavior; reconnect once afterward. Google may require app verification for the Drive scope.
 - **The browser callback didn't return to Obsidian**: Try disconnecting and reconnecting from the plugin settings.
 
 ## Privacy & network use

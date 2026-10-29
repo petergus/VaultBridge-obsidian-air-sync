@@ -1,4 +1,5 @@
 import type { RemoteChecksum } from "../types";
+import { md5 } from "../../utils/md5";
 
 /** Google Drive folder MIME type */
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -113,14 +114,15 @@ export function buildWorkspaceStubContent(file: GoogleDriveFile): ArrayBuffer {
 }
 
 /**
- * Derive a synthetic remote checksum for a Google Workspace file stub.
- * Content changes don't alter the stub (it's just a pointer), but the file's
- * identity (id + mimeType) determines whether the stub needs to be created
- * or updated. Using `opaque` algo since this isn't reproducible from local
- * file content.
+ * Derive a deterministic MD5 checksum over the Google Workspace shortcut stub
+ * bytes (`buildWorkspaceStubContent`). Using `md5` rather than `opaque` lets
+ * cold-scan initial matching (`enrichHashesForInitialMatch`) verify local `.gdoc` /
+ * `.gsheet` stubs directly without forcing them through false conflict resolution,
+ * while still changing whenever the file's `(id, mimeType)` identity changes.
  */
-export function workspaceStubChecksum(file: GoogleDriveFile): RemoteChecksum {
-	return { algo: "opaque", value: `workspace:${file.id}:${file.mimeType}` };
+export function workspaceStubChecksum(file: GoogleDriveFile, stubContent?: ArrayBuffer): RemoteChecksum {
+	const content = stubContent ?? buildWorkspaceStubContent(file);
+	return { algo: "md5", value: md5(content) };
 }
 
 /**

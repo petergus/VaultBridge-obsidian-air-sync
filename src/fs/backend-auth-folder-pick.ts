@@ -11,7 +11,7 @@ export interface BackendAuthFolderPickContext {
 	picker: WebFolderPicker;
 	logger: Logger;
 	saveSettings: () => Promise<void>;
-	resetAll: () => Promise<void>;
+	resetCheckpoint: () => Promise<void>;
 	closeRemoteFs: () => void;
 	notify: (message: string) => void;
 }
@@ -31,7 +31,10 @@ export async function completeAuthFolderPick(
 		await context.saveSettings();
 		authCompleted = true;
 
-		await context.resetAll();
+		// Drop the prior target's checkpoint store while backendData still keys it.
+		// SyncRecord baselines are only cleared by initBackend() if the picked folder
+		// changes the identity — re-picking the same folder to re-grant access keeps them.
+		await context.resetCheckpoint();
 		const result = await context.picker.completeWebFolderPick(
 			context.params, context.settings, context.logger,
 		);

@@ -6,8 +6,8 @@ import { AppFolderPickerModal, type AppFolderPickerProvider } from "./app-folder
 
 /**
  * Render the shared "Connection status" row: a ●-prefixed status line (colored via
- * the `vaultbridge-status-connected`/`-disconnected` classes) plus a Connect/Disconnect
- * button. Used by every backend renderer.
+ * the `vaultbridge-status-connected`/`-disconnected` classes) plus Re-authenticate /
+ * Connect / Disconnect buttons. Used by every backend renderer.
  *
  * `onConnect` overrides the default `startAuth` for backends that must guard first
  * (e.g. Google Drive custom requires a folder id) — return `false` from it to abort
@@ -23,20 +23,35 @@ export function renderConnectionStatus(
 	},
 ): void {
 	const { connected, connectLabel, actions } = opts;
+	const runConnect = async (): Promise<boolean> => {
+		if (opts.onConnect) {
+			return (await opts.onConnect()) !== false;
+		}
+		await actions.startAuth();
+		return true;
+	};
 	const setting = new Setting(containerEl)
 		.setName("Connection status")
 		.setDesc(connected ? "● Connected" : "● Not connected");
 	setting.settingEl.addClass(connected ? "vaultbridge-status-connected" : "vaultbridge-status-disconnected");
+	if (connected) {
+		setting.addButton((button) =>
+			button
+				.setButtonText("Re-authenticate")
+				.onClick(async () => {
+					if (!(await runConnect())) return;
+					actions.refreshDisplay();
+				}),
+		);
+	}
 	setting.addButton((button) =>
 		button
 			.setButtonText(connected ? "Disconnect" : connectLabel)
 			.onClick(async () => {
 				if (connected) {
 					await actions.disconnect();
-				} else if (opts.onConnect) {
-					if ((await opts.onConnect()) === false) return;
-				} else {
-					await actions.startAuth();
+				} else if (!(await runConnect())) {
+					return;
 				}
 				actions.refreshDisplay();
 			}),
