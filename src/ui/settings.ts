@@ -5,6 +5,7 @@ import { getAllBackendProviders, getBackendProvider } from "../fs/registry";
 import { getBackendSettingsRenderer } from "./backend-settings";
 import { parseLines } from "../utils/parse-lines";
 import { renderConfigSyncSettings } from "./config-sync-settings";
+import { detectMovedDestination } from "./deletion-modal";
 
 export class VaultBridgeSettingTab extends PluginSettingTab {
 	plugin: VaultBridgePlugin;
@@ -69,22 +70,41 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 		if (pendingDeletions.length > 0) {
 			const serverCount = pendingDeletions.filter((a) => a.action === "delete_remote").length;
 			const localCount = pendingDeletions.filter((a) => a.action === "delete_local").length;
+			let movedCount = 0;
+			for (const a of pendingDeletions) {
+				if (detectMovedDestination(this.app, a)) movedCount++;
+			}
+
 			const deletionsContainer = containerEl.createDiv("sync-deletions-settings-container");
 			const alertEl = deletionsContainer.createDiv("sync-deletions-alert-box");
 
-			const desc = serverCount > 0 && localCount > 0
-				? `${pendingDeletions.length} deletions held for safety (${serverCount} server, ${localCount} local). Review before applying.`
-				: serverCount > 0
-				? `${serverCount} server deletion${serverCount === 1 ? "" : "s"} held for safety. Review before removing from cloud storage.`
-				: `${localCount} local deletion${localCount === 1 ? "" : "s"} held for safety. Review before removing from this device.`;
+			let desc: string;
+			let boxName = "Held deletions awaiting review";
+			let btnText = "Review deletions";
+
+			if (movedCount === pendingDeletions.length) {
+				desc = `${pendingDeletions.length} moved item${pendingDeletions.length === 1 ? "" : "s"} awaiting approval before updating in cloud storage.`;
+				boxName = "Held moves awaiting review";
+				btnText = "Review moves";
+			} else if (movedCount > 0) {
+				desc = `${movedCount} moved item${movedCount === 1 ? "" : "s"} and ${pendingDeletions.length - movedCount} deletion${pendingDeletions.length - movedCount === 1 ? "" : "s"} held for safety. Review before applying.`;
+				boxName = "Held changes awaiting review";
+				btnText = "Review changes";
+			} else {
+				desc = serverCount > 0 && localCount > 0
+					? `${pendingDeletions.length} deletions held for safety (${serverCount} server, ${localCount} local). Review before applying.`
+					: serverCount > 0
+					? `${serverCount} server deletion${serverCount === 1 ? "" : "s"} held for safety. Review before removing from cloud storage.`
+					: `${localCount} local deletion${localCount === 1 ? "" : "s"} held for safety. Review before removing from this device.`;
+			}
 
 			new Setting(alertEl)
-				.setName("Held deletions awaiting review")
+				.setName(boxName)
 				.setDesc(desc)
 				.setHeading()
 				.addButton((btn) => {
 					btn
-						.setButtonText("Review deletions")
+						.setButtonText(btnText)
 						.setCta()
 						.onClick(() => {
 							this.plugin.openDeletionReviewModal();

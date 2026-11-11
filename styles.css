@@ -226,6 +226,23 @@
 	border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
+.vaultbridge-badge-moved {
+	background-color: rgba(16, 185, 129, 0.15);
+	color: var(--color-green, #10b981);
+	border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.vaultbridge-move-arrow {
+	color: var(--text-accent);
+	margin: 0 6px;
+	font-weight: bold;
+}
+
+.vaultbridge-destination-path {
+	color: var(--text-accent);
+	font-weight: 600;
+}
+
 /* Deletions settings panel */
 .sync-deletions-alert-box {
 	background-color: var(--background-modifier-error-hover);

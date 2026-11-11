@@ -240,6 +240,8 @@ export function coalesceLocalFolderRenames(
 			consumed.add(newPath);
 			consumedFileRenames.add(newPath);
 		}
+		consumed.add(oldFolder);
+		consumed.add(newFolder);
 
 		folderRenames.push({
 			path: newFolder,
@@ -271,6 +273,14 @@ export function coalesceLocalFolderRenames(
 				}
 			}
 		}
+		// Also pair the root folder itself if both old delete_remote and new push exist
+		if (!consumed.has(pair.oldPath) && !consumed.has(pair.newPath) && !remaining.has(pair.newPath)) {
+			const oldDel = byPath.get(pair.oldPath);
+			const newPush = byPath.get(pair.newPath);
+			if (oldDel?.action === "delete_remote" && newPush?.action === "push") {
+				remaining.set(pair.newPath, pair.oldPath);
+			}
+		}
 	}
 
 	if (consumed.size === 0) {
@@ -300,7 +310,7 @@ export function optimizeHeuristicRenames(
 			!a.remote?.isDirectory &&
 			!a.local?.isDirectory &&
 			!!a.baseline?.hash &&
-			(a.baseline?.localSize ?? 0) > 0
+			(a.baseline?.localSize ?? 0) >= 0
 		) {
 			delCandidates.push(a);
 		}
@@ -316,7 +326,7 @@ export function optimizeHeuristicRenames(
 			a.action === "push" &&
 			!a.local?.isDirectory &&
 			!!a.local?.hash &&
-			(a.local?.size ?? 0) > 0
+			(a.local?.size ?? 0) >= 0
 		) {
 			pushCandidates.push(a);
 		}
@@ -353,7 +363,7 @@ export function optimizeHeuristicRenames(
 
 		const delName = del.path.split("/").pop();
 		let bestMatch = available.find((p) => p.path.split("/").pop() === delName);
-		if (!bestMatch && available.length === 1) {
+		if (!bestMatch && available.length === 1 && (del.baseline?.localSize ?? 0) > 0) {
 			bestMatch = available[0];
 		}
 

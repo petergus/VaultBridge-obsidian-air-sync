@@ -97,6 +97,14 @@ export class FakeEl {
 		return this.text;
 	}
 
+	get textContent(): string {
+		return this.text + this.children.map((c) => c.textContent).join("");
+	}
+
+	get innerText(): string {
+		return this.textContent;
+	}
+
 	addClass(...classes: string[]): this {
 		const existing = this.cls ? this.cls.split(/\s+/).filter(Boolean) : [];
 		for (const c of classes) {
@@ -354,6 +362,12 @@ export class Vault {
 
 	getName(): string {
 		return "test-vault";
+	}
+
+	getRoot(): TFolder {
+		const root = new TFolder("/");
+		root.children = this.immediateChildren("");
+		return root;
 	}
 
 	getAbstractFileByPath(path: string): TFile | TFolder | null {

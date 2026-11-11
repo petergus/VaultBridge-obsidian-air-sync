@@ -348,7 +348,7 @@ export async function enrichHashesForRenames(
 	// Deleted baseline files whose size might match an unhashed local addition (e.g. external move)
 	const deletedSizes = new Set<number>();
 	for (const e of entries) {
-		if (!e.local && e.prevSync && e.prevSync.hash && (e.prevSync.localSize ?? 0) > 0) {
+		if (!e.local && e.prevSync && e.prevSync.hash && (e.prevSync.localSize ?? 0) >= 0) {
 			deletedSizes.add(e.prevSync.localSize);
 		}
 	}
@@ -400,10 +400,25 @@ async function confirmLocalDeletions(
 	const candidates = entries.filter((e) => !e.local && e.prevSync);
 	if (candidates.length === 0) return;
 
+	// Build map of lower-cased paths for entries that exist locally
+	const localPathsLower = new Map<string, string>();
+	for (const e of entries) {
+		if (e.local) {
+			localPathsLower.set(e.path.toLowerCase(), e.path);
+		}
+	}
+
 	const pool = new AsyncPool(10);
 	await Promise.all(
 		candidates.map((entry) =>
 			pool.run(async () => {
+				const conflictingLocalPath = localPathsLower.get(entry.path.toLowerCase());
+				if (conflictingLocalPath && conflictingLocalPath !== entry.path) {
+					// A local file exists under this path with different casing.
+					// The candidate path was case-renamed / deleted locally; do not re-stat() it
+					// because case-insensitive filesystems (APFS/NTFS) would falsely report it present.
+					return;
+				}
 				try {
 					const stat = await localFs.stat(entry.path);
 					if (stat) {

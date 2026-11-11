@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { groupPendingDeletions, DeletionReviewModal, DirectDeleteConfirmModal } from "./deletion-modal";
+import { groupPendingDeletions, detectMovedDestination, DeletionReviewModal, DirectDeleteConfirmModal } from "./deletion-modal";
 import { VaultBridgeSettingTab } from "./settings";
 import type { SyncAction } from "../sync/types";
 import { __ui, Notice, TFile, TFolder } from "../__mocks__/obsidian";
@@ -158,9 +158,10 @@ describe("DeletionReviewModal", () => {
 			{ path: "note2.md", action: "delete_local" },
 		];
 
+		const approveSpy = vi.fn().mockResolvedValue(undefined);
 		const mockOrchestrator = {
 			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
-			approvePendingDeletions: vi.fn(),
+			approvePendingDeletions: approveSpy,
 		};
 
 		const writeTextMock = vi.fn().mockResolvedValue(undefined);
@@ -181,6 +182,87 @@ describe("DeletionReviewModal", () => {
 			"[Server] note1.md\n[Local] note2.md"
 		);
 		expect(Notice.lastNotice).toContain("Copied 2 file paths to clipboard");
+	});
+
+	it("identifies moved files and renders them with a destination and Moved badge", async () => {
+		const mockVaultFile = new TFile("archive/moved-note.md", 100, 1000);
+		const mockApp = {
+			vault: {
+				getFiles: vi.fn().mockReturnValue([mockVaultFile]),
+			},
+		};
+
+		const pendingActions: SyncAction[] = [
+			{
+				path: "projects/moved-note.md",
+				action: "delete_remote",
+				baseline: {
+					path: "projects/moved-note.md",
+					hash: "h1",
+					localSize: 100,
+					remoteSize: 100,
+					localMtime: 1000,
+					remoteMtime: 1000,
+					syncedAt: 900,
+				},
+			},
+		];
+
+		const approveSpy = vi.fn().mockResolvedValue(undefined);
+		const mockOrchestrator = {
+			getPendingDeletions: vi.fn().mockReturnValue(pendingActions),
+			approvePendingDeletions: approveSpy,
+		};
+
+		const modal = new DeletionReviewModal(mockApp as any, mockOrchestrator as any);
+		modal.open();
+
+		const contentEl = modal.contentEl as any;
+		// Check that stat cards include Moved (Vault)
+		expect(contentEl.innerText).toContain("Moved (Vault)");
+		expect(contentEl.innerText).toContain("archive/moved-note.md");
+		expect(contentEl.innerText).toContain("Moved");
+
+		// Trigger approval
+		await __ui.buttons[0]!.click();
+		expect(approveSpy).toHaveBeenCalledWith(pendingActions);
+	});
+});
+
+describe("detectMovedDestination", () => {
+	it("returns null when app or vault is missing", () => {
+		expect(detectMovedDestination(undefined, { path: "a.md", action: "delete_remote" })).toBeNull();
+	});
+
+	it("returns null for non-delete_remote actions", () => {
+		const mockApp = { vault: { getFiles: vi.fn().mockReturnValue([]) } };
+		expect(detectMovedDestination(mockApp as any, { path: "a.md", action: "delete_local" })).toBeNull();
+	});
+
+	it("matches candidate file with same name and matching size", () => {
+		const f1 = new TFile("dest/note.md", 250, 1000);
+		const f2 = new TFile("other/note.md", 100, 1000);
+		const mockApp = {
+			vault: {
+				getFiles: vi.fn().mockReturnValue([f1, f2]),
+			},
+		};
+
+		const action: SyncAction = {
+			path: "old/note.md",
+			action: "delete_remote",
+			baseline: {
+				path: "old/note.md",
+				hash: "h1",
+				localSize: 100,
+				remoteSize: 100,
+				localMtime: 1000,
+				remoteMtime: 1000,
+				syncedAt: 900,
+			},
+		};
+
+		expect(detectMovedDestination(mockApp as any, action)).toBe("other/note.md");
 	});
 });
 

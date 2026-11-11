@@ -28,7 +28,40 @@ export function groupPendingDeletions(actions: readonly SyncAction[]): Map<strin
 	return groups;
 }
 
-type DeletionFilter = "all" | "server" | "local";
+type DeletionFilter = "all" | "moved" | "server" | "local";
+
+/**
+ * Detect if a held deletion action corresponds to a file that was moved locally in the vault.
+ * Returns the destination path if found, or null otherwise.
+ */
+export function detectMovedDestination(
+	app: App | undefined,
+	action: SyncAction,
+): string | null {
+	if (!app || !app.vault) return null;
+	if (action.action !== "delete_remote") return null;
+
+	const parts = action.path.split("/");
+	const filename = parts.pop();
+	if (!filename) return null;
+
+	// Check all files currently in the vault
+	const allFiles = app.vault.getFiles?.() ?? [];
+	const candidates = allFiles.filter((f) => f.name === filename && f.path !== action.path);
+	if (candidates.length === 0) return null;
+
+	if (candidates.length === 1) {
+		return candidates[0]!.path;
+	}
+
+	// If multiple candidates share the same filename, match by file size if baseline exists
+	if (action.baseline?.localSize !== undefined) {
+		const sizeMatch = candidates.find((f) => f.stat.size === action.baseline!.localSize);
+		if (sizeMatch) return sizeMatch.path;
+	}
+
+	return candidates[0]!.path;
+}
 
 /**
  * Modal shown when SyncOrchestrator quarantines deletions because they exceed the safety limit.
@@ -41,6 +74,7 @@ export class DeletionReviewModal extends Modal {
 	private searchQuery = "";
 	private dynamicContainer: HTMLElement | null = null;
 	private pillElements: HTMLElement[] = [];
+	private moveMap = new Map<string, string>();
 
 	constructor(app: App, orchestrator: SyncOrchestrator, onApproved?: () => void) {
 		super(app);
@@ -57,6 +91,7 @@ export class DeletionReviewModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		this.pillElements = [];
+		this.moveMap.clear();
 
 		const pending = this.orchestrator.getPendingDeletions();
 
@@ -72,7 +107,13 @@ export class DeletionReviewModal extends Modal {
 			return;
 		}
 
-		const serverDeletions = pending.filter((a) => a.action === "delete_remote");
+		for (const a of pending) {
+			const dest = detectMovedDestination(this.app, a);
+			if (dest) this.moveMap.set(a.path, dest);
+		}
+
+		const movedDeletions = pending.filter((a) => this.moveMap.has(a.path));
+		const serverDeletions = pending.filter((a) => a.action === "delete_remote" && !this.moveMap.has(a.path));
 		const localDeletions = pending.filter((a) => a.action === "delete_local");
 
 		contentEl.createEl("p", {
@@ -86,6 +127,12 @@ export class DeletionReviewModal extends Modal {
 		totalCard.createDiv({ text: String(pending.length), cls: "vaultbridge-stat-value" });
 		totalCard.createDiv({ text: "Total held", cls: "vaultbridge-stat-label" });
 
+		if (movedDeletions.length > 0) {
+			const movedCard = statCardsContainer.createDiv("vaultbridge-deletion-stat-card");
+			movedCard.createDiv({ text: String(movedDeletions.length), cls: "vaultbridge-stat-value" });
+			movedCard.createDiv({ text: "Moved (Vault)", cls: "vaultbridge-stat-label" });
+		}
+
 		const serverCard = statCardsContainer.createDiv("vaultbridge-deletion-stat-card");
 		serverCard.createDiv({ text: String(serverDeletions.length), cls: "vaultbridge-stat-value" });
 		serverCard.createDiv({ text: "Server deletions (Cloud)", cls: "vaultbridge-stat-label" });
@@ -95,7 +142,11 @@ export class DeletionReviewModal extends Modal {
 		localCard.createDiv({ text: "Local deletions (Device)", cls: "vaultbridge-stat-label" });
 
 		// Quarantined explanation
-		const desc = serverDeletions.length > 0 && localDeletions.length === 0
+		const desc = movedDeletions.length === pending.length
+			? `These ${pending.length} file(s) were moved or renamed in your vault. Approving will update their locations in cloud storage.`
+			: movedDeletions.length > 0
+			? `${movedDeletions.length} item(s) were moved/renamed in your vault, and ${serverDeletions.length + localDeletions.length} deletion(s) are held for safety.`
+			: serverDeletions.length > 0 && localDeletions.length === 0
 			? "These files were deleted locally in your vault and are held before being removed from remote cloud storage."
 			: localDeletions.length > 0 && serverDeletions.length === 0
 			? "These files were deleted in cloud storage (or another device) and are held before being removed from this local vault."
@@ -103,7 +154,7 @@ export class DeletionReviewModal extends Modal {
 
 		contentEl.createEl("p", {
 			text: desc,
-			cls: "mod-warning",
+			cls: movedDeletions.length === pending.length ? "" : "mod-warning",
 		});
 
 		// Filter & Search Toolbar
@@ -112,9 +163,14 @@ export class DeletionReviewModal extends Modal {
 		const filterPillsEl = toolbarEl.createDiv("vaultbridge-filter-pills");
 		const filters: { id: DeletionFilter; label: string; count: number }[] = [
 			{ id: "all", label: "All", count: pending.length },
+		];
+		if (movedDeletions.length > 0) {
+			filters.push({ id: "moved", label: "Moved", count: movedDeletions.length });
+		}
+		filters.push(
 			{ id: "server", label: "Server deletions", count: serverDeletions.length },
 			{ id: "local", label: "Local deletions", count: localDeletions.length },
-		];
+		);
 
 		for (const f of filters) {
 			const pill = filterPillsEl.createEl("button", {
@@ -147,7 +203,11 @@ export class DeletionReviewModal extends Modal {
 		});
 		copyBtn.addEventListener("click", () => {
 			const visible = this.getFilteredActions(pending);
-			const pathList = visible.map((a) => `${a.action === "delete_remote" ? "[Server]" : "[Local]"} ${a.path}`).join("\n");
+			const pathList = visible.map((a) => {
+				const dest = this.moveMap.get(a.path);
+				if (dest) return `[Moved] ${a.path} -> ${dest}`;
+				return `${a.action === "delete_remote" ? "[Server]" : "[Local]"} ${a.path}`;
+			}).join("\n");
 			void this.copyToClipboard(pathList, visible.length);
 		});
 
@@ -158,11 +218,15 @@ export class DeletionReviewModal extends Modal {
 
 	private getFilteredActions(pending: SyncAction[]): SyncAction[] {
 		return pending.filter((a) => {
-			if (this.activeFilter === "server" && a.action !== "delete_remote") return false;
+			if (this.activeFilter === "moved" && !this.moveMap.has(a.path)) return false;
+			if (this.activeFilter === "server" && (a.action !== "delete_remote" || this.moveMap.has(a.path))) return false;
 			if (this.activeFilter === "local" && a.action !== "delete_local") return false;
 			if (this.searchQuery.trim()) {
 				const q = this.searchQuery.toLowerCase().trim();
-				if (!a.path.toLowerCase().includes(q)) return false;
+				const dest = this.moveMap.get(a.path);
+				const matchesPath = a.path.toLowerCase().includes(q);
+				const matchesDest = dest ? dest.toLowerCase().includes(q) : false;
+				if (!matchesPath && !matchesDest) return false;
 			}
 			return true;
 		});
@@ -177,6 +241,7 @@ export class DeletionReviewModal extends Modal {
 			const text = (p as any).text ?? p.textContent ?? "";
 			if (
 				(this.activeFilter === "all" && text.startsWith("All")) ||
+				(this.activeFilter === "moved" && text.startsWith("Moved")) ||
 				(this.activeFilter === "server" && text.startsWith("Server")) ||
 				(this.activeFilter === "local" && text.startsWith("Local"))
 			) {
@@ -199,23 +264,35 @@ export class DeletionReviewModal extends Modal {
 		} else {
 			for (const action of filtered) {
 				const row = listContainer.createDiv("vaultbridge-deletion-row");
-				row.setAttribute("title", action.path);
+				const dest = this.moveMap.get(action.path);
+				row.setAttribute("title", dest ? `${action.path} → ${dest}` : action.path);
 
 				const pathEl = row.createDiv("vaultbridge-deletion-path");
-				const parts = action.path.split("/");
-				const filename = parts.pop() ?? action.path;
-				const folder = parts.join("/");
+				if (dest) {
+					pathEl.createSpan({ text: action.path, cls: "vaultbridge-deletion-folder" });
+					pathEl.createSpan({ text: " → ", cls: "vaultbridge-move-arrow" });
+					pathEl.createSpan({ text: dest, cls: "vaultbridge-destination-path" });
 
-				if (folder) {
-					pathEl.createSpan({ text: `${folder}/`, cls: "vaultbridge-deletion-folder" });
+					row.createSpan({
+						text: "Moved",
+						cls: "vaultbridge-badge vaultbridge-badge-moved",
+					});
+				} else {
+					const parts = action.path.split("/");
+					const filename = parts.pop() ?? action.path;
+					const folder = parts.join("/");
+
+					if (folder) {
+						pathEl.createSpan({ text: `${folder}/`, cls: "vaultbridge-deletion-folder" });
+					}
+					pathEl.createSpan({ text: filename, cls: "vaultbridge-deletion-filename" });
+
+					const isServer = action.action === "delete_remote";
+					row.createSpan({
+						text: isServer ? "Server (Cloud)" : "Local (Device)",
+						cls: `vaultbridge-badge ${isServer ? "vaultbridge-badge-remote" : "vaultbridge-badge-local"}`,
+					});
 				}
-				pathEl.createSpan({ text: filename, cls: "vaultbridge-deletion-filename" });
-
-				const isServer = action.action === "delete_remote";
-				row.createSpan({
-					text: isServer ? "Server (Cloud)" : "Local (Device)",
-					cls: `vaultbridge-badge ${isServer ? "vaultbridge-badge-remote" : "vaultbridge-badge-local"}`,
-				});
 			}
 		}
 
@@ -223,28 +300,34 @@ export class DeletionReviewModal extends Modal {
 		const footerSetting = new Setting(this.dynamicContainer);
 
 		const isSubset = filtered.length !== pending.length;
+		const allMoved = pending.length > 0 && pending.every((a) => this.moveMap.has(a.path));
 		const approveText = isSubset
 			? `Approve displayed deletions (${filtered.length})`
+			: allMoved
+			? `Approve all moves (${pending.length})`
 			: `Approve all deletions (${pending.length})`;
 
 		if (filtered.length > 0) {
 			footerSetting.addButton((btn) => {
-				btn
-					.setButtonText(approveText)
-					.setWarning()
-					.onClick(async () => {
-						this.close();
-						const actionsToApply = isSubset ? filtered : pending;
-						new Notice(`Applying ${actionsToApply.length} deletion(s)...`);
-						try {
-							await this.orchestrator.approvePendingDeletions(actionsToApply);
-							this.onApproved?.();
-						} catch (err) {
-							new Notice(
-								`Failed to apply deletions: ${err instanceof Error ? err.message : String(err)}`,
-							);
-						}
-					});
+				btn.setButtonText(approveText);
+				if (allMoved && !isSubset) {
+					btn.setCta();
+				} else {
+					btn.setWarning();
+				}
+				btn.onClick(async () => {
+					this.close();
+					const actionsToApply = isSubset ? filtered : pending;
+					new Notice(`Applying ${actionsToApply.length} deletion(s)...`);
+					try {
+						await this.orchestrator.approvePendingDeletions(actionsToApply);
+						this.onApproved?.();
+					} catch (err) {
+						new Notice(
+							`Failed to apply deletions: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					}
+				});
 			});
 		}
 

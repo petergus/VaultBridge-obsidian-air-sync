@@ -390,7 +390,21 @@ async function runActionIO(
 				const localEntity = await localFs.stat(path) ?? action.local;
 				return { localEntity, remoteEntity };
 			}
-			const content = await localFs.read(path);
+			let content: ArrayBuffer;
+			try {
+				content = await localFs.read(path);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (msg.includes("File not found") || (err as { code?: string })?.code === "ENOENT") {
+					const notFoundErr = new Error(msg);
+					Object.assign(notFoundErr, {
+						permanent: true,
+						permanentCode: (err as any)?.permanentCode ?? "local.file_not_found",
+					});
+					throw notFoundErr;
+				}
+				throw err;
+			}
 			const remoteEntity = await remoteFs.write(path, content, action.local.mtime);
 			const localEntity = await localEntityForPushedContent(localFs, path, content, action.local);
 			return { localEntity, remoteEntity };
@@ -421,7 +435,21 @@ async function runActionIO(
 		case "rename_remote": {
 			await remoteFs.rename(action.oldPath, path);
 			if (action.hasContentChange && !action.isFolder) {
-				const content = await localFs.read(path);
+				let content: ArrayBuffer;
+				try {
+					content = await localFs.read(path);
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					if (msg.includes("File not found") || (err as { code?: string })?.code === "ENOENT") {
+						const notFoundErr = new Error(msg);
+						Object.assign(notFoundErr, {
+							permanent: true,
+							permanentCode: (err as any)?.permanentCode ?? "local.file_not_found",
+						});
+						throw notFoundErr;
+					}
+					throw err;
+				}
 				const plannedLocal = action.local ?? (await localFs.stat(path));
 				const mtime = plannedLocal?.mtime ?? Date.now();
 				const remoteEntity = await remoteFs.write(path, content, mtime);

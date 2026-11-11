@@ -441,4 +441,66 @@ describe("LocalFs", () => {
 			);
 		});
 	});
+
+	describe("case-sensitivity mismatch guards", () => {
+		it("returns null on stat() when path has different casing than indexed file", async () => {
+			const { vault, fs } = createLocalFs();
+			const content = new TextEncoder().encode("content").buffer;
+			await fs.write("notes/BACKUP.md", content, Date.now());
+
+			// Simulate case-insensitive filesystem where adapter sees "backup.md"
+			const adapterStatSpy = vi.spyOn(vault.adapter, "stat").mockResolvedValue({
+				type: "file",
+				size: 7,
+				mtime: 1000,
+				ctime: 1000,
+			});
+
+			const entity = await fs.stat("notes/backup.md");
+			expect(entity).toBeNull();
+			// Must not even call adapter.stat because case mismatch is detected in vault index
+			expect(adapterStatSpy).not.toHaveBeenCalled();
+		});
+
+		it("throws permanent error on read() when path has case mismatch with vault", async () => {
+			const { vault, fs } = createLocalFs();
+			const content = new TextEncoder().encode("content").buffer;
+			await fs.write("notes/BACKUP.md", content, Date.now());
+
+			vi.spyOn(vault.adapter, "exists").mockResolvedValue(true);
+
+			let thrown: (Error & { permanent?: boolean; permanentCode?: string }) | undefined;
+			try {
+				await fs.read("notes/backup.md");
+			} catch (err) {
+				thrown = err as Error & { permanent?: boolean; permanentCode?: string };
+			}
+			expect(thrown).toBeDefined();
+			expect(thrown?.message).toContain("case mismatch with vault");
+			expect(thrown?.permanent).toBe(true);
+			expect(thrown?.permanentCode).toBe("local.case_mismatch");
+		});
+
+		it("falls back to adapter on read() when file exists on disk and has no case mismatch", async () => {
+			const { vault, fs } = createLocalFs();
+			const content = new TextEncoder().encode("unindexed disk content").buffer;
+			await vault.adapter.writeBinary("unindexed.txt", content);
+
+			const result = await fs.read("unindexed.txt");
+			expect(new TextDecoder().decode(result)).toBe("unindexed disk content");
+		});
+
+		it("does not delete survivor file via adapter on delete() when case mismatch exists", async () => {
+			const { vault, fs } = createLocalFs();
+			const content = new TextEncoder().encode("content").buffer;
+			await fs.write("notes/BACKUP.md", content, Date.now());
+
+			// Simulate case-insensitive adapter where exists() returns true for lowercase
+			vi.spyOn(vault.adapter, "exists").mockResolvedValue(true);
+			const removeSpy = vi.spyOn(vault.adapter, "remove");
+
+			await fs.delete("notes/backup.md");
+			expect(removeSpy).not.toHaveBeenCalled();
+		});
+	});
 });

@@ -391,6 +391,8 @@ describe("executePlan", () => {
 
 			expect(result.failed).toHaveLength(1);
 			expect(result.failed[0]!.action.path).toBe("missing.md");
+			expect((result.failed[0]!.error as any).permanent).toBe(true);
+			expect((result.failed[0]!.error as any).permanentCode).toBe("local.file_not_found");
 			expect(result.succeeded).toHaveLength(1);
 			expect(result.succeeded[0]!.action.path).toBe("good.md");
 		});

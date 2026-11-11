@@ -928,6 +928,7 @@ describe("SyncOrchestrator", () => {
 			const settings = baseMockSettings({
 				backendType: "test",
 				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
 			});
 			// hasCheckpoint lives on the FS's checkpoint capability now (the cursor is
 			// stored with the cache).
@@ -1013,6 +1014,7 @@ describe("SyncOrchestrator", () => {
 			const settings = baseMockSettings({
 				backendType: "test",
 				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
 			});
 			// A committed checkpoint exists, so hasCheckpoint stays true throughout —
 			// the recovery must come from the post-failure cold flag, not from hasCheckpoint.
@@ -1062,6 +1064,7 @@ describe("SyncOrchestrator", () => {
 			const settings = baseMockSettings({
 				backendType: "test",
 				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
 			});
 			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
 
@@ -1150,6 +1153,7 @@ describe("SyncOrchestrator", () => {
 			const settings = baseMockSettings({
 				backendType: "test",
 				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
 			});
 			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
 
@@ -1173,6 +1177,41 @@ describe("SyncOrchestrator", () => {
 			await orchestrator.close();
 		});
 
+		it("quarantines repeated local file not found push failures", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			// File is planned for push, but localFs.read throws File not found
+			addFile(localFs, "missing.md", "temp", 1000);
+			const readSpy = vi.spyOn(localFs, "read").mockRejectedValue(
+				new Error("File not found: missing.md"),
+			);
+
+			const settings = baseMockSettings({
+				backendType: "test",
+				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
+			});
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
+
+			const deps = createDeps({
+				getSettings: () => settings,
+				localFs: () => localFs,
+				remoteFs: () => remoteFs,
+				backendProvider: () => mockProvider({}),
+			});
+			const orchestrator = new SyncOrchestrator(deps);
+
+			await orchestrator.runSync();
+			await orchestrator.runSync();
+			await orchestrator.runSync();
+
+			// Read should be attempted twice, then blocked/quarantined on the 3rd run
+			expect(readSpy).toHaveBeenCalledTimes(2);
+			expect(deps.onStatusChange).toHaveBeenCalledWith("partial_error");
+			expect(deps.notify).toHaveBeenLastCalledWith("Sync: 1 blocked");
+			await orchestrator.close();
+		});
+
 		/**
 		 * The cursor commits atomically with the file map INSIDE commitCheckpoint (one
 		 * IndexedDB transaction — ADR 0001). If that flush fails it must propagate so
@@ -1191,6 +1230,7 @@ describe("SyncOrchestrator", () => {
 			const settings = baseMockSettings({
 				backendType: "test",
 				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
 			});
 			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
 

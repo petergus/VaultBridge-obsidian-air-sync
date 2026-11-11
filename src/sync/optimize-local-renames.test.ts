@@ -282,6 +282,31 @@ describe("coalesceLocalFolderRenames", () => {
 		expect(result.skipped).toHaveLength(0);
 	});
 
+	it("consumes old and new folder actions when present in actions list", () => {
+		const actions: SyncAction[] = [
+			{ path: "A", action: "delete_remote", remote: { path: "A", isDirectory: true, size: 0, mtime: 0, hash: "" } },
+			{ path: "B", action: "push", local: { path: "B", isDirectory: true, size: 0, mtime: 0, hash: "" } },
+			{
+				path: "A/f1.md",
+				action: "delete_remote",
+				remote: entity("A/f1.md", "h1"),
+				baseline: baseline("A/f1.md", "h1"),
+			},
+			{ path: "B/f1.md", action: "push", local: entity("B/f1.md", "h1") },
+		];
+		const folderPairs = new Map([["B", "A"]]);
+		const filePairs = new Map([["B/f1.md", "A/f1.md"]]);
+		const result = coalesceLocalFolderRenames(actions, folderPairs, filePairs);
+
+		expect(result.actions).toHaveLength(1);
+		expect(result.actions[0]).toMatchObject({
+			path: "B",
+			action: "rename_remote",
+			oldPath: "A",
+			isFolder: true,
+		});
+	});
+
 	it("skips folder coalescing when a child has hash mismatch", () => {
 		const actions: SyncAction[] = [
 			{
@@ -639,6 +664,36 @@ describe("optimizeHeuristicRenames", () => {
 		const result = optimizeHeuristicRenames(actions);
 		expect(result.applied).toEqual([
 			{ oldPath: "source/unique-name.md", newPath: "dest/unique-name.md" },
+		]);
+	});
+
+	it("matches 0-byte file when filename is identical", () => {
+		const emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+		const actions: SyncAction[] = [
+			{
+				path: "folderA/blank.md",
+				action: "delete_remote",
+				remote: { path: "folderA/blank.md", isDirectory: false, size: 0, mtime: 1000, hash: emptyHash },
+				baseline: {
+					path: "folderA/blank.md",
+					hash: emptyHash,
+					localSize: 0,
+					remoteSize: 0,
+					localMtime: 1000,
+					remoteMtime: 1000,
+					syncedAt: 900,
+				},
+			},
+			{
+				path: "folderB/blank.md",
+				action: "push",
+				local: { path: "folderB/blank.md", isDirectory: false, size: 0, mtime: 1000, hash: emptyHash },
+			},
+		];
+
+		const result = optimizeHeuristicRenames(actions);
+		expect(result.applied).toEqual([
+			{ oldPath: "folderA/blank.md", newPath: "folderB/blank.md" },
 		]);
 	});
 });

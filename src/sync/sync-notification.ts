@@ -23,8 +23,8 @@ export function buildNotificationMessage(result: ExecutionResult): string {
 	if (counts.pushed > 0) parts.push(`${counts.pushed} pushed`);
 	if (counts.pulled > 0) parts.push(`${counts.pulled} pulled`);
 	if (counts.matched > 0) parts.push(`${counts.matched} matched`);
+	if (counts.renamed > 0) parts.push(`${counts.renamed} moved/renamed`);
 	if (counts.deleted > 0) parts.push(`${counts.deleted} deleted`);
-	if (counts.renamed > 0) parts.push(`${counts.renamed} renamed`);
 	if (result.conflicts.length > 0) parts.push(`${result.conflicts.length} conflicts`);
 	if (result.failed.length > 0) parts.push(`${result.failed.length} errors`);
 	if (result.blocked.length > 0) parts.push(`${result.blocked.length} blocked`);

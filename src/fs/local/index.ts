@@ -77,6 +77,12 @@ export class LocalFs implements IFileSystem {
 			return this.dotPath.stat(path);
 		}
 		if (!file) {
+			// If a file exists in the vault with the same path but different casing,
+			// this requested path does not exist (case mismatch). On case-insensitive
+			// filesystems (APFS/NTFS), adapter.stat() would falsely match the differently-cased file.
+			if (this.hasCaseMismatchInVault(path)) {
+				return null;
+			}
 			// A normal path may simply not be loaded into the index yet, so confirm
 			// against the raw adapter (absence is what drives deletions). The adapter
 			// stat is regime-independent, so the dot-path adapter's identical impl
@@ -116,7 +122,19 @@ export class LocalFs implements IFileSystem {
 		if (!file && isDotPrefixed(path)) {
 			return this.dotPath.read(path);
 		}
-		if (!file) throw new Error(`File not found: ${path}`);
+		if (!file) {
+			if (this.hasCaseMismatchInVault(path)) {
+				const err = new Error(`File not found (case mismatch with vault): ${path}`);
+				Object.assign(err, { permanent: true, permanentCode: "local.case_mismatch" });
+				throw err;
+			}
+			if (await this.vault.adapter.exists(path)) {
+				return this.vault.adapter.readBinary(path);
+			}
+			const err = new Error(`File not found: ${path}`);
+			Object.assign(err, { permanent: true, permanentCode: "local.file_not_found" });
+			throw err;
+		}
 		if (!(file instanceof TFile)) throw new Error(`Not a file (is a directory): ${path}`);
 		return this.vault.readBinary(file);
 	}
@@ -209,6 +227,12 @@ export class LocalFs implements IFileSystem {
 			// Fallback: if the file/folder exists on disk but is not in the index,
 			// delete it directly via the adapter.
 			if (await this.vault.adapter.exists(path)) {
+				// If there is a file in the vault with the same name but different casing,
+				// do NOT remove via adapter — on case-insensitive filesystems (APFS/NTFS),
+				// adapter.remove(path) would delete the differently-cased survivor file!
+				if (this.hasCaseMismatchInVault(path)) {
+					return;
+				}
 				const s = await this.vault.adapter.stat(path);
 				if (s?.type === "folder") {
 					await this.vault.adapter.rmdir(path, true);
@@ -302,5 +326,20 @@ export class LocalFs implements IFileSystem {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Check if an item exists in Obsidian's index with different casing.
+	 * On case-insensitive filesystems (macOS APFS / Windows NTFS), adapter.stat()
+	 * and adapter.exists() match files regardless of casing. If the vault already
+	 * tracks a file with the same lowercase path but different exact case, the
+	 * requested path is a case collision or case-renamed away, and must not be
+	 * treated as matching the differently-cased file on disk.
+	 */
+	private hasCaseMismatchInVault(path: string): boolean {
+		const lower = path.toLowerCase();
+		return this.vault.getAllLoadedFiles().some(
+			(f) => f.path.toLowerCase() === lower && f.path !== path,
+		);
 	}
 }

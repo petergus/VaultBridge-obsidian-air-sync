@@ -791,6 +791,28 @@ describe("collectChanges — warm deletion confirmation", () => {
 		const entry = result.entries.find((e) => e.path === "gone.md");
 		expect(entry?.local).toBeUndefined(); // genuine deletion preserved
 	});
+
+	it("does not re-stat candidate deletion when another local entry exists with different casing", async () => {
+		// Baseline had lowercase "backup.md"
+		await stateStore.put(
+			makeRecord("backup.md", { localMtime: 1000, localSize: 5, remoteMtime: 1000, remoteSize: 5 }),
+		);
+		addFile(remoteFs, "backup.md", "hello", 1000);
+		// Local now has uppercase "BACKUP.md"
+		addFile(localFs, "BACKUP.md", "hello", 2000);
+
+		// If stat were called on "backup.md" (e.g. simulating a case-insensitive APFS stat),
+		// it would return a file entity. We spy on localFs.stat to verify it's never called for backup.md.
+		const statSpy = vi.spyOn(localFs, "stat");
+
+		const result = await collectChanges(makeDeps());
+
+		// "backup.md" should remain deleted locally (entry.local undefined)
+		const backupEntry = result.entries.find((e) => e.path === "backup.md");
+		expect(backupEntry?.local).toBeUndefined();
+		// "backup.md" should NOT have been re-stat'd because "BACKUP.md" exists locally
+		expect(statSpy).not.toHaveBeenCalledWith("backup.md");
+	});
 });
 
 /**

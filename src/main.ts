@@ -16,7 +16,7 @@ import { ConflictHistory } from "./sync/conflict-history";
 import { ConflictTracker } from "./sync/conflict-tracker";
 import { handleOAuthProtocolCallback } from "./fs/oauth-callback-error";
 import { registerContextMenuHandlers } from "./ui/context-menu";
-import { DeletionReviewModal } from "./ui/deletion-modal";
+import { DeletionReviewModal, detectMovedDestination } from "./ui/deletion-modal";
 
 export default class VaultBridgePlugin extends Plugin {
 	settings!: VaultBridgeSettings;
@@ -417,6 +417,17 @@ export default class VaultBridgePlugin extends Plugin {
 		if (!this.statusBarEl) return;
 		const pendingCount = this.orchestrator?.getPendingDeletions().length ?? 0;
 		if (pendingCount > 0) {
+			const pending = this.orchestrator?.getPendingDeletions() ?? [];
+			let movedCount = 0;
+			for (const a of pending) {
+				if (detectMovedDestination(this.app, a)) movedCount++;
+			}
+			if (movedCount === pendingCount) {
+				this.statusBarEl.setText(`🔄 ${pendingCount} held move${pendingCount === 1 ? "" : "s"}`);
+				this.statusBarEl.addClass("mod-clickable");
+				setTooltip(this.statusBarEl, "Click to review held moves", { placement: "top" });
+				return;
+			}
 			this.statusBarEl.setText(`⚠️ ${pendingCount} held deletion${pendingCount === 1 ? "" : "s"}`);
 			this.statusBarEl.addClass("mod-clickable");
 			setTooltip(this.statusBarEl, "Click to review held deletions", { placement: "top" });
