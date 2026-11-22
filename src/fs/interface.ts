@@ -47,6 +47,12 @@ export interface IFileSystem {
 	 */
 	write(path: string, content: ArrayBuffer, mtime: number): Promise<FileEntity>;
 
+	/** Create a file without replacing an existing vault entry. */
+	createFileIfMissing?(path: string, content: ArrayBuffer, mtime: number): Promise<boolean>;
+
+	/** Atomically replace existing text if its current contents match what was read. */
+	replaceTextIfUnchanged?(path: string, expected: string, content: string, mtime: number): Promise<boolean>;
+
 	/**
 	 * Create a directory (and parents if needed). Returns the resulting FileEntity.
 	 *

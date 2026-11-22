@@ -1,3 +1,4 @@
+import { sha256 } from "../utils/hash";
 import { describe, it, expect, beforeEach } from "vitest";
 import { resolveConflict } from "./conflict-resolver";
 import type { SyncRecord } from "./types";
@@ -77,7 +78,7 @@ describe("resolveConflict", () => {
 
 			const baseline: SyncRecord = {
 				path: "file.md",
-				hash: "",
+				hash: await sha256(new TextEncoder().encode(base).buffer),
 				localMtime: 1000,
 				remoteMtime: 1000,
 				localSize: base.length,
@@ -118,7 +119,7 @@ describe("resolveConflict", () => {
 
 			const baseline: SyncRecord = {
 				path: "file.md",
-				hash: "",
+				hash: await sha256(new TextEncoder().encode(base).buffer),
 				localMtime: 1000,
 				remoteMtime: 1000,
 				localSize: base.length,

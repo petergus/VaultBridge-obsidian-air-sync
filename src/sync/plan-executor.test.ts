@@ -650,11 +650,13 @@ describe("executePlan", () => {
 			let running = 0;
 			let maxRunning = 0;
 			const gate = deferred();
+			const bothStarted = deferred();
 			const gateDelete = (fs: ReturnType<typeof createMockFs>) => {
 				const orig = fs.delete.bind(fs);
 				vi.spyOn(fs, "delete").mockImplementation(async (path: string) => {
 					running++;
 					maxRunning = Math.max(maxRunning, running);
+					if (running === 2) bothStarted.resolve();
 					await gate.promise;
 					running--;
 					return orig(path);
@@ -669,7 +671,7 @@ describe("executePlan", () => {
 			]);
 
 			const p = executePlan(plan, ctx);
-			await flush();
+			await bothStarted.promise;
 			expect(running).toBe(2); // both lanes' deletes are in flight at once
 			gate.resolve();
 			await p;

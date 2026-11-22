@@ -1018,9 +1018,10 @@ describe("GoogleDriveFs.getChangedPaths", () => {
 
 		const result = await fs.getChangedPaths();
 
-		// 410 triggers full scan with delta (no changes since cache matches)
+		// 410 triggers a full scan and reevaluation of surviving paths, including
+		// same-id/path content edits no longer available through the expired cursor.
 		expect(result).not.toBeNull();
-		expect(result?.modified).toEqual([]);
+		expect(result?.modified).toEqual(["a.md"]);
 		expect(result?.deleted).toEqual([]);
 		// A second full scan should have been triggered
 		expect(listAllFiles).toHaveBeenCalledTimes(2);

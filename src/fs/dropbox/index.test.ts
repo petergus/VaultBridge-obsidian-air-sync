@@ -24,6 +24,51 @@ async function makeFs(rootFolderId = "id:root") {
 
 const PLAIN_LIST = "/files/list_folder";
 
+describe("DropboxFs empty directory pruning", () => {
+	it("preserves remote children added after the cycle's cached listing", async () => {
+		const spy = (await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
+			const url = typeof opts === "string" ? opts : opts.url;
+			if (url.includes("get_metadata")) return Promise.resolve(metaRes());
+			if (url.includes("get_latest_cursor")) return Promise.resolve(mockRes({ cursor: "C0" }));
+			if (url.endsWith(PLAIN_LIST)) {
+				const body = JSON.parse(typeof opts !== "string" && typeof opts.body === "string" ? opts.body : "{}") as { path: string };
+				return Promise.resolve(mockRes({
+					entries: body.path === "id:root" ? [dbxFolder("dir", "/root/dir")] : [dbxFile("new", "/root/dir/new.md")],
+					cursor: "C1", has_more: false,
+				}));
+			}
+			return Promise.resolve(mockRes({}));
+		});
+		const fs = await makeFs();
+		await fs.list();
+		expect(await fs.listDir("dir")).toEqual([]); // stale cycle cache
+		expect(await fs.deleteEmptyDir("dir")).toBe(false);
+		expect(spy.mock.calls.some(([opts]) => String((opts as RequestUrlParam).url).includes("delete_v2"))).toBe(false);
+		expect(await fs.stat("dir")).not.toBeNull();
+	});
+
+	it("deletes a genuinely empty directory after a live lookup by its stable id", async () => {
+		const requests: string[] = [];
+		(await spyRequestUrl()).mockImplementation((opts: string | RequestUrlParam) => {
+			const url = typeof opts === "string" ? opts : opts.url;
+			if (url.includes("get_metadata")) return Promise.resolve(metaRes());
+			if (url.includes("get_latest_cursor")) return Promise.resolve(mockRes({ cursor: "C0" }));
+			if (url.endsWith(PLAIN_LIST)) {
+				const body = JSON.parse(typeof opts !== "string" && typeof opts.body === "string" ? opts.body : "{}") as { path: string; recursive: boolean };
+				requests.push(body.path);
+				if (body.path === "id:dir") expect(body.recursive).toBe(false);
+				return Promise.resolve(mockRes({ entries: body.path === "id:root" ? [dbxFolder("dir", "/root/dir")] : [], cursor: "C1", has_more: false }));
+			}
+			return Promise.resolve(mockRes({}));
+		});
+		const fs = await makeFs();
+		await fs.list();
+		expect(await fs.deleteEmptyDir("dir")).toBe(true);
+		expect(requests).toEqual(["id:root", "id:dir"]);
+		expect(await fs.stat("dir")).toBeNull();
+	});
+});
+
 /** Mock get_metadata(id:root) → the folder's current path (drives refreshRootPath). */
 function metaRes(rootDisplay = "/root") {
 	return mockRes(dbxFolder("root", rootDisplay));

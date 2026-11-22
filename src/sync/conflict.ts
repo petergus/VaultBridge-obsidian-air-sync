@@ -6,6 +6,8 @@ import type { Logger } from "../logging/logger";
 import { getFileExtension } from "../utils/path";
 import { isMergeEligible, threeWayMerge } from "./merge";
 import { sameContent } from "./content-identity";
+import { sha256 } from "../utils/hash";
+import { buffersEqual, decodeUtf8, replaceLocalContent, writeMissingLocal } from "./conflict-write-guards";
 
 /** Internal strategy used by the low-level conflict resolver */
 export type ResolverStrategy = "keep_newer" | "duplicate" | "auto_merge";
@@ -17,6 +19,8 @@ export interface ConflictResolutionResult {
 	duplicatePath?: string;
 	/** True if the merged result contains unresolved conflict markers */
 	hasConflictMarkers?: boolean;
+	/** Exact bytes reconciled at the original path, for committing sync state. */
+	syncedContent?: ArrayBuffer;
 }
 
 export interface ConflictContext {
@@ -53,30 +57,22 @@ async function keepLocal(
 	path: string,
 	localFs: IFileSystem,
 	remoteFs: IFileSystem,
-	local?: FileEntity
+	local: FileEntity,
 ): Promise<ConflictResolutionResult> {
-	if (local) {
-		const content = await localFs.read(path);
-		await remoteFs.write(path, content, local.mtime);
-	} else {
-		await remoteFs.delete(path);
-	}
-	return { action: "kept_local" };
+	const content = await localFs.read(path);
+	await remoteFs.write(path, content, local.mtime);
+	return { action: "kept_local", syncedContent: content };
 }
 
 async function keepRemote(
 	path: string,
 	localFs: IFileSystem,
 	remoteFs: IFileSystem,
-	remote?: FileEntity
+	remote: FileEntity,
 ): Promise<ConflictResolutionResult> {
-	if (remote) {
-		const content = await remoteFs.read(path);
-		await localFs.write(path, content, remote.mtime);
-	} else {
-		await localFs.delete(path);
-	}
-	return { action: "kept_remote" };
+	const content = await remoteFs.read(path);
+	await writeMissingLocal(path, localFs, content, remote.mtime);
+	return { action: "kept_remote", syncedContent: content };
 }
 
 async function keepNewer(
@@ -116,16 +112,6 @@ async function keepNewer(
 	return duplicate(path, localFs, remoteFs, local, remote);
 }
 
-function buffersEqual(a: ArrayBuffer, b: ArrayBuffer): boolean {
-	if (a.byteLength !== b.byteLength) return false;
-	const va = new Uint8Array(a);
-	const vb = new Uint8Array(b);
-	for (let i = 0; i < va.length; i++) {
-		if (va[i] !== vb[i]) return false;
-	}
-	return true;
-}
-
 /**
  * Write the winner's content to the original path on both sides, after saving the
  * loser's content as a `.conflict` copy on both sides. Byte-identical content needs
@@ -143,22 +129,30 @@ async function keepWinnerWithBackup(
 	const remoteContent = await remoteFs.read(path);
 	const action = winner === "local" ? "kept_local" : "kept_remote";
 	if (buffersEqual(localContent, remoteContent)) {
-		return { action };
+		return { action, syncedContent: localContent };
+	}
+
+	// Binary conflicts keep the local original and save the remote version separately.
+	// The Obsidian adapter only offers atomic replacement for text.
+	if (winner === "remote" && localFs.replaceTextIfUnchanged &&
+		(!isMergeEligible(path, Math.max(localContent.byteLength, remoteContent.byteLength)) ||
+			decodeUtf8(localContent) === undefined || decodeUtf8(remoteContent) === undefined)) {
+		return duplicate(path, localFs, remoteFs, local, remote);
 	}
 
 	const [loserContent, loser] = winner === "local"
 		? [remoteContent, remote]
 		: [localContent, local];
 	const duplicatePath = await generateConflictPath(path, localFs, remoteFs);
-	await localFs.write(duplicatePath, loserContent, loser.mtime);
+	await writeMissingLocal(duplicatePath, localFs, loserContent, loser.mtime);
 	await remoteFs.write(duplicatePath, loserContent, loser.mtime);
 
 	if (winner === "local") {
 		await remoteFs.write(path, localContent, local.mtime);
 	} else {
-		await localFs.write(path, remoteContent, remote.mtime);
+		await replaceLocalContent(path, localFs, localContent, remoteContent, remote.mtime);
 	}
-	return { action, duplicatePath };
+	return { action, duplicatePath, syncedContent: winner === "local" ? localContent : remoteContent };
 }
 
 async function duplicate(
@@ -171,15 +165,15 @@ async function duplicate(
 	// Delete-vs-modify: local deleted, remote has content → restore remote version locally
 	if (!local && remote) {
 		const remoteContent = await remoteFs.read(path);
-		await localFs.write(path, remoteContent, remote.mtime);
-		return { action: "duplicated" };
+		await writeMissingLocal(path, localFs, remoteContent, remote.mtime);
+		return { action: "duplicated", syncedContent: remoteContent };
 	}
 
 	// Delete-vs-modify: remote deleted, local has content → restore local version remotely
 	if (local && !remote) {
 		const localContent = await localFs.read(path);
 		await remoteFs.write(path, localContent, local.mtime);
-		return { action: "duplicated" };
+		return { action: "duplicated", syncedContent: localContent };
 	}
 
 	// Both deleted — nothing to do
@@ -192,15 +186,15 @@ async function duplicate(
 	const localContent = await localFs.read(path);
 	if (buffersEqual(localContent, remoteContent)) {
 		// Byte-identical (e.g. the same edit made on both devices): nothing to preserve.
-		return { action: "kept_local" };
+		return { action: "kept_local", syncedContent: localContent };
 	}
 	const duplicatePath = await generateConflictPath(path, localFs, remoteFs);
-	await localFs.write(duplicatePath, remoteContent, remote!.mtime);
+	await writeMissingLocal(duplicatePath, localFs, remoteContent, remote!.mtime);
 	await remoteFs.write(duplicatePath, remoteContent, remote!.mtime);
 
 	await remoteFs.write(path, localContent, local!.mtime);
 
-	return { action: "duplicated", duplicatePath };
+	return { action: "duplicated", duplicatePath, syncedContent: localContent };
 }
 
 /** Generate a conflict file path with sequential numbering to avoid overwrites.
@@ -282,14 +276,19 @@ async function attemptThreeWayMerge(
 		return resolveWithStrategy(ctx, fallback);
 	}
 
-	const decoder = new TextDecoder();
-	const encoder = new TextEncoder();
+	if (!prevSync.hash || await sha256(prevSyncContent) !== prevSync.hash) {
+		logger?.warn("Ignoring unverified 3-way merge base; preserving both versions", { path });
+		return duplicate(path, localFs, remoteFs, local, remote);
+	}
 
-	const baseText = decoder.decode(prevSyncContent);
 	const localContent = await localFs.read(path);
-	const localText = decoder.decode(localContent);
 	const remoteContent = await remoteFs.read(path);
-	const remoteText = decoder.decode(remoteContent);
+	const baseText = decodeUtf8(prevSyncContent);
+	const localText = decodeUtf8(localContent);
+	const remoteText = decodeUtf8(remoteContent);
+	if (baseText === undefined || localText === undefined || remoteText === undefined) {
+		return duplicate(path, localFs, remoteFs, local, remote);
+	}
 
 	let mergeResult;
 	try {
@@ -338,17 +337,17 @@ async function attemptThreeWayMerge(
 		return duplicate(path, localFs, remoteFs, local, remote);
 	}
 
-	const mergedBuffer = encoder.encode(mergeResult.content).buffer.slice(0);
+	const mergedBuffer = new TextEncoder().encode(mergeResult.content).buffer;
 
 	// Write merged content to both sides (with rollback if remote fails)
 	const now = Date.now();
-	await localFs.write(path, mergedBuffer, now);
+	await replaceLocalContent(path, localFs, localContent, mergedBuffer, now);
 	try {
 		await remoteFs.write(path, mergedBuffer, now);
 	} catch (remoteWriteErr) {
-		// Restore local to pre-merge state
+		// Restore the exact pre-merge bytes only if the local file still contains our merge.
 		try {
-			await localFs.write(path, encoder.encode(localText).buffer.slice(0), local.mtime);
+			await replaceLocalContent(path, localFs, mergedBuffer, localContent, local.mtime);
 		} catch (restoreErr) {
 			logger?.error("Failed to restore local after merge failure", { path, error: restoreErr instanceof Error ? restoreErr.message : String(restoreErr) });
 		}
@@ -358,6 +357,7 @@ async function attemptThreeWayMerge(
 	return {
 		action: "merged",
 		hasConflictMarkers: mergeResult.hasConflicts,
+		syncedContent: mergedBuffer,
 	};
 }
 

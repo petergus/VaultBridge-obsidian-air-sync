@@ -1,3 +1,4 @@
+import { sha256 } from "../utils/hash";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { commitAction, buildSyncRecord } from "./state-committer";
 import type { SyncAction } from "./types";
@@ -143,6 +144,7 @@ describe("commitAction", () => {
 	it("rename_remote with enableThreeWayMerge: stores content at new path", async () => {
 		const buf = new TextEncoder().encode("content").buffer;
 		const localEntry = makeFile("new.md", "content", 1000);
+		localEntry.entity.hash = await sha256(buf);
 		localFs.files.set("new.md", { content: buf, entity: localEntry.entity });
 		const { entity: remote } = makeFile("new.md", "content", 2000);
 		const action: SyncAction = { path: "new.md", action: "rename_remote", oldPath: "old.md" };
@@ -167,6 +169,7 @@ describe("commitAction", () => {
 	it("push with enableThreeWayMerge: stores merge-base content for eligible file", async () => {
 		const buf = new TextEncoder().encode("hello world").buffer;
 		const localEntry = makeFile("h.md", "hello world", 1000);
+		localEntry.entity.hash = await sha256(buf);
 		localFs.files.set("h.md", { content: buf, entity: localEntry.entity });
 
 		const { entity: remote } = makeFile("h.md", "hello world", 1000);

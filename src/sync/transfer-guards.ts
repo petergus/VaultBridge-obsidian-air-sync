@@ -11,7 +11,7 @@ import { sha256 } from "../utils/hash";
  */
 
 /**
- * A pull found the local file different from what the plan saw — the user edited,
+ * A pull or deletion found the local file different from what the plan saw — the user edited,
  * created, or deleted it while the action waited for a slot or downloaded. Marked
  * `permanent` so the per-action retry doesn't spin on it; the failed cycle holds the
  * checkpoint back and the next (cold) cycle re-plans the path as a conflict.
@@ -33,6 +33,22 @@ export class LocalChangedDuringSyncError extends Error {
 export async function assertLocalUnchangedSincePlan(localFs: IFileSystem, action: SyncAction): Promise<void> {
 	const planned = action.local;
 	const current = await localFs.stat(action.path);
+	assertLocalMatchesPlan(action.path, planned, current);
+}
+
+/** A disappeared deletion target is already safe; an edited/replaced target is not. */
+export async function assertLocalUnchangedBeforeDelete(localFs: IFileSystem, action: SyncAction): Promise<FileEntity | null> {
+	const current = await localFs.stat(action.path);
+	// A delete_local plan means local content matched the baseline. Use that hash
+	// when list() omitted it, so same-size edits with preserved mtimes are protected.
+	const planned = action.local && !action.local.hash && action.baseline?.hash
+		? { ...action.local, hash: action.baseline.hash }
+		: action.local;
+	if (current) assertLocalMatchesPlan(action.path, planned, current);
+	return current;
+}
+
+function assertLocalMatchesPlan(path: string, planned: FileEntity | undefined, current: FileEntity | null): void {
 	let changed: boolean;
 	if (!planned || !current) {
 		changed = (planned === undefined) !== (current === null);
@@ -43,7 +59,7 @@ export async function assertLocalUnchangedSincePlan(localFs: IFileSystem, action
 	} else {
 		changed = planned.mtime !== current.mtime || planned.size !== current.size;
 	}
-	if (changed) throw new LocalChangedDuringSyncError(action.path);
+	if (changed) throw new LocalChangedDuringSyncError(path);
 }
 
 /**
@@ -59,10 +75,19 @@ export async function localEntityForPushedContent(
 	content: ArrayBuffer,
 	planned: FileEntity,
 ): Promise<FileEntity> {
-	const pushedHash = await sha256(content);
 	// stat() may return null if the file was deleted after the read; fall back to the
 	// planned metadata (the next cycle then sees a genuine local deletion).
 	const current = await localFs.stat(path);
-	if (current && current.hash === pushedHash) return current;
-	return { ...(current ?? planned), hash: pushedHash, mtime: 0 };
+	return localEntityForSyncedContent(content, path, current ?? undefined, planned);
+}
+
+export async function localEntityForSyncedContent(
+	content: ArrayBuffer,
+	path: string,
+	current: FileEntity | undefined,
+	planned?: FileEntity,
+): Promise<FileEntity> {
+	const hash = await sha256(content);
+	if (current && current.hash === hash) return current;
+	return { ...planned, path, isDirectory: false, hash, size: content.byteLength, mtime: 0 };
 }

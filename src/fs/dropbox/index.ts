@@ -185,6 +185,25 @@ export class DropboxFs extends CachingRemoteFs<DropboxEntry> {
 		});
 	}
 
+	/** Confirm emptiness on Dropbox itself; the cycle's cache can miss new children. */
+	async deleteEmptyDir(path: string): Promise<boolean> {
+		path = normalizeSyncPath(path);
+		if (!path) return false;
+		const folderId = await this.cacheMutex.run(async () => {
+			await this.ensureInitialized();
+			if (!this.cache.isFolder(path) || this.cache.getChildren(path)?.size) return null;
+			return this.cache.idAt(path) ?? null;
+		});
+		if (!folderId) return false;
+		const children = await this.client.listFolderAll(folderId, false);
+		if (children.length > 0) {
+			this.logger?.warn("Skipping prune of non-empty remote directory", { path, folderId });
+			return false;
+		}
+		await this.delete(path);
+		return true;
+	}
+
 	/** Ensure a folder exists by path, creating parents as needed (idempotent). */
 	private async ensureFolder(path: string): Promise<void> {
 		if (!path || this.cache.isFolder(path)) return;

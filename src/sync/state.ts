@@ -137,6 +137,18 @@ export class SyncStateStore {
 		});
 	}
 
+	/** Atomically replace the sync record and its verified merge base. */
+	async putWithMergeBase(record: SyncRecord, content: ArrayBuffer | undefined): Promise<void> {
+		const encoded = content === undefined ? undefined : encodeContent(content);
+		await this.helper.runTransaction([STORE_NAME, CONTENT_STORE_NAME], "readwrite", (tx) => {
+			tx.objectStore(STORE_NAME).put(record);
+			const bases = tx.objectStore(CONTENT_STORE_NAME);
+			if (encoded === undefined) bases.delete(record.path);
+			else bases.put({ path: record.path, content: encoded });
+			return () => {};
+		});
+	}
+
 	/** Store prevSyncContent separately for a path (compressed via content-codec) */
 	async putContent(path: string, content: ArrayBuffer): Promise<void> {
 		const encoded = encodeContent(content);

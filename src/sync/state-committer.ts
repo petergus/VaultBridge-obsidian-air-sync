@@ -3,6 +3,7 @@ import type { SyncAction, SyncRecord } from "./types";
 import type { SyncStateStore } from "./state";
 import type { Logger } from "../logging/logger";
 import { isMergeEligible } from "./merge";
+import { sha256 } from "../utils/hash";
 
 export interface StateCommitterContext {
 	stateStore: SyncStateStore;
@@ -30,27 +31,29 @@ export function buildSyncRecord(local: FileEntity | undefined, remote: FileEntit
 }
 
 /**
- * Store the local content as a 3-way-merge base, when merge is enabled and the file
- * is eligible. Best-effort: a read/write failure is logged, not propagated — a missing
- * merge base only costs a future conflict resolution, never correctness.
+ * Verify the merge base against the same content hash we commit in the record.
+ * Transfers supply their exact bytes. Other actions may read the file again,
+ * but an intervening edit must never be saved as the common ancestor.
  */
-async function maybeStoreMergeBase(
+async function commitRecord(
 	ctx: StateCommitterContext,
-	path: string,
-	localEntity: FileEntity | undefined,
-	size: number,
+	record: SyncRecord,
+	syncedContent: ArrayBuffer | undefined,
 ): Promise<void> {
 	const { stateStore, localFs, enableThreeWayMerge, logger } = ctx;
-	if (!(enableThreeWayMerge && localFs && localEntity && isMergeEligible(path, size))) return;
-	try {
-		const content = await localFs.read(path);
-		await stateStore.putContent(path, content);
-	} catch (err) {
-		logger?.warn("Failed to store content for 3-way merge", {
-			path,
-			error: err instanceof Error ? err.message : String(err),
-		});
+	let base: ArrayBuffer | undefined;
+	if (enableThreeWayMerge && isMergeEligible(record.path, record.localSize)) {
+		try {
+			const content = syncedContent ?? await localFs?.read(record.path);
+			if (content && record.hash && await sha256(content) === record.hash) base = content;
+		} catch (err) {
+			logger?.warn("Failed to store content for 3-way merge", {
+				path: record.path,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
+	await stateStore.putWithMergeBase(record, base);
 }
 
 /**
@@ -68,6 +71,7 @@ export async function commitAction(
 	localEntity: FileEntity | undefined,
 	remoteEntity: FileEntity | undefined,
 	ctx: StateCommitterContext,
+	syncedContent?: ArrayBuffer,
 ): Promise<void> {
 	const { path } = action;
 	const { stateStore } = ctx;
@@ -78,8 +82,7 @@ export async function commitAction(
 		case "match":
 		case "conflict": {
 			const record = buildSyncRecord(localEntity, remoteEntity, path);
-			await stateStore.put(record);
-			await maybeStoreMergeBase(ctx, path, localEntity, record.localSize);
+			await commitRecord(ctx, record, syncedContent);
 			break;
 		}
 
@@ -93,8 +96,7 @@ export async function commitAction(
 			} else {
 				await stateStore.delete(action.oldPath);
 				const renameRecord = buildSyncRecord(localEntity, remoteEntity, path);
-				await stateStore.put(renameRecord);
-				await maybeStoreMergeBase(ctx, path, localEntity, renameRecord.localSize);
+				await commitRecord(ctx, renameRecord, syncedContent);
 			}
 			break;
 		}

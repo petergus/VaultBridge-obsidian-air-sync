@@ -361,7 +361,7 @@ describe("conflict resolution never discards a version", () => {
 
 		const r = await resolveWithStrategy({ path: "f.md", localFs, remoteFs, local, remote }, "keep_newer");
 
-		expect(r).toEqual({ action: "kept_remote", duplicatePath: "f.conflict.md" });
+		expect(r).toMatchObject({ action: "kept_remote", duplicatePath: "f.conflict.md" });
 		expect(readText(localFs, "f.md")).toBe("newer remote");
 		expect(readText(localFs, "f.conflict.md")).toBe("older local");
 		expect(readText(remoteFs, "f.conflict.md")).toBe("older local");
@@ -375,7 +375,7 @@ describe("conflict resolution never discards a version", () => {
 
 		const r = await resolveWithStrategy({ path: "f.md", localFs, remoteFs, local, remote }, "keep_newer");
 
-		expect(r).toEqual({ action: "kept_remote" });
+		expect(r.action).toBe("kept_remote");
 		expect(localFs.files.has("f.conflict.md")).toBe(false);
 	});
 
@@ -394,7 +394,7 @@ describe("conflict resolution never discards a version", () => {
 
 		const r = await resolveWithStrategy({
 			path, localFs, remoteFs, local, remote,
-			prevSync: baseline(path, { localSize: base.length, remoteSize: base.length }),
+			prevSync: baseline(path, { hash: await sha256(encode(base)), localSize: base.length, remoteSize: base.length }),
 			stateStore: stateStore as unknown as SyncStateStore,
 		}, "auto_merge");
 

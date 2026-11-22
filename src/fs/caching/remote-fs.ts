@@ -414,9 +414,9 @@ export abstract class CachingRemoteFs<TFile> implements IFileSystem {
 
 	/**
 	 * Compute a remote delta by diffing a pre-scan path-by-id snapshot against the
-	 * freshly-scanned cache. Keys on backend id, so it detects adds/deletes/renames but
-	 * NOT in-place content edits (same path+id); those are caught by the next incremental
-	 * sync or WARM mode's local-vs-record check.
+	 * freshly-scanned cache. Keys on backend id to detect adds/deletes/renames. Report
+	 * every surviving path for reevaluation too: the expired cursor cannot replay
+	 * in-place content edits that happened before the replacement scan's cursor.
 	 */
 	private diffById(oldPathById: Map<string, string>): RemoteDelta {
 		const modified: string[] = [];
@@ -434,6 +434,8 @@ export abstract class CachingRemoteFs<TFile> implements IFileSystem {
 				renamed.push({ oldPath, newPath, isFolder: this.cache.isFolder(newPath) || undefined });
 				modified.push(newPath);
 				deleted.push(oldPath);
+			} else {
+				modified.push(newPath);
 			}
 		}
 		for (const [id, oldPath] of oldPathById) {

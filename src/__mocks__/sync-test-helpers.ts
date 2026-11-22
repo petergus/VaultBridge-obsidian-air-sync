@@ -133,6 +133,13 @@ export function createMockFs(name: string): IFileSystem & {
 			}
 			return Promise.resolve(entities);
 		},
+		deleteEmptyDir(path: string) {
+			path = normalizeSyncPath(path);
+			if (!files.get(path)?.entity.isDirectory) return Promise.resolve(false);
+			if ([...files.keys()].some((key) => key.startsWith(path + "/"))) return Promise.resolve(false);
+			files.delete(path);
+			return Promise.resolve(true);
+		},
 		delete(path: string) {
 			path = normalizeSyncPath(path);
 			const prefix = path + "/";
@@ -246,6 +253,12 @@ export function createMockStateStore(): {
 		clear() {
 			records.clear();
 			contents.clear();
+			return Promise.resolve();
+		},
+		putWithMergeBase(record: SyncRecord, content: ArrayBuffer | undefined) {
+			records.set(record.path, record);
+			if (content === undefined) contents.delete(record.path);
+			else contents.set(record.path, content.slice(0));
 			return Promise.resolve();
 		},
 		putContent(path: string, content: ArrayBuffer) {

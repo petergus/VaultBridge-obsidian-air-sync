@@ -1,3 +1,4 @@
+import { sha256 } from "../utils/hash";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveWithStrategy, generateConflictPath } from "./conflict";
 import {
@@ -85,7 +86,7 @@ describe("resolveWithStrategy", () => {
 			stateStore.contents.set("f.md", encode(base));
 			const baseline: SyncRecord = {
 				path: "f.md",
-				hash: "",
+				hash: await sha256(encode(base)),
 				localMtime: 1000,
 				remoteMtime: 1000,
 				localSize: base.length,
@@ -119,9 +120,9 @@ describe("resolveWithStrategy", () => {
 	});
 
 	describe("auto_merge — JSON integrity guard", () => {
-		const baseline = (content: string): SyncRecord => ({
+		const baseline = async (content: string): Promise<SyncRecord> => ({
 			path: "data.json",
-			hash: "",
+			hash: await sha256(encode(content)),
 			localMtime: 1000,
 			remoteMtime: 1000,
 			localSize: content.length,
@@ -145,7 +146,7 @@ describe("resolveWithStrategy", () => {
 					remoteFs,
 					local,
 					remote,
-					prevSync: baseline(base),
+					prevSync: await baseline(base),
 					stateStore,
 				},
 				"auto_merge",

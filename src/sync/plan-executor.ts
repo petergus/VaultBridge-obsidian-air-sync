@@ -12,7 +12,14 @@ import { AsyncPool, AdaptivePool } from "../queue/async-queue";
 import type { AdaptivePoolOpts } from "../queue/async-queue";
 import { decideRetry, sleep } from "./error";
 import { pruneEmptyParentFolders } from "./prune-empty-folders";
-import { assertLocalUnchangedSincePlan, localEntityForPushedContent } from "./transfer-guards";
+import {
+	assertLocalUnchangedSincePlan,
+	assertLocalUnchangedBeforeDelete,
+	LocalChangedDuringSyncError,
+	localEntityForPushedContent,
+	localEntityForSyncedContent,
+} from "./transfer-guards";
+import { ExecutionControl } from "./execution-control";
 
 export { LocalChangedDuringSyncError } from "./transfer-guards";
 
@@ -193,8 +200,8 @@ function transferSize(action: SyncAction): number {
  * a same-subtree structural rename/delete (Phase 3), and conflict (which mutates a
  * planner-invisible sibling, Phase 2) never overlaps either. Renames stay serial
  * (two endpoints + folder-subtree rewrites); deletes pool (the bulk-delete win).
- * `AuthError` from any action rejects its pool/lane and propagates out (aborting the
- * cycle); all other per-action errors are caught into `result.failed`.
+ * `AuthError` stops queued actions and propagates out after active work settles
+ * (aborting the cycle); all other per-action errors are caught into `result.failed`.
  */
 export async function executePlan(
 	plan: SyncPlan,
@@ -223,8 +230,14 @@ export async function executePlan(
 	const deleteRemote: SyncAction[] = [];
 	const renameLocal: SyncAction[] = [];
 	const deleteLocal: SyncAction[] = [];
+	const control = new ExecutionControl();
 
-	for (const action of plan.actions) {
+	for (const plannedAction of plan.actions) {
+		// Production plans carry local snapshots. Also snapshot direct callers' deletion
+		// targets before transfers begin, so edits during Phase 1 cannot escape the guard.
+		const action = plannedAction.action === "delete_local" && !plannedAction.local
+			? { ...plannedAction, local: await ctx.localFs.stat(plannedAction.path) ?? undefined }
+			: plannedAction;
 		const blockedReason = ctx.isActionBlocked?.(action);
 		if (blockedReason) {
 			result.blocked.push({ action, reason: blockedReason });
@@ -257,18 +270,18 @@ export async function executePlan(
 	// than all at once (a cold scan can emit thousands of matches).
 	const transferPool = new AdaptivePool(ctx.transferPool ?? DESKTOP_TRANSFER_POOL);
 	const statePool = new AsyncPool(STATE_COMMIT_CONCURRENCY);
-	await Promise.all([
+	await control.drain([
 		...transfers.map((action) =>
 			transferPool.run(
-				() =>
+				() => control.run(() =>
 					executeAction(action, ctx, result, reportProgress, () =>
 						transferPool.noteRateLimit()
-					),
+					)),
 				transferSize(action)
 			)
 		),
 		...stateOnly.map((action) =>
-			statePool.run(() => executeAction(action, ctx, result, reportProgress))
+			statePool.run(() => control.run(() => executeAction(action, ctx, result, reportProgress)))
 		),
 	]);
 
@@ -283,21 +296,29 @@ export async function executePlan(
 	// They touch disjoint filesystems (the local FS has no remote metadata cache), so
 	// they share no mutable state — safe to overlap. Within each lane: renames first
 	// (serial — a rename has two endpoints and folder renames rewrite subtrees), then
-	// deletes pooled (the bulk-folder-delete win). Each lane has its OWN delete pool.
-	const runLane = async (renames: SyncAction[], deletes: SyncAction[]) => {
+	// deletes pooled (the bulk-folder-delete win), with local depth barriers so child
+	// failures cannot be bypassed by recursive parent deletes. Each lane has its OWN pool.
+	const runLane = async (renames: SyncAction[], deletes: SyncAction[], lane: "local" | "remote") => {
 		for (const action of renames) {
-			await executeAction(action, ctx, result, reportProgress);
+			await control.run(() => executeAction(action, ctx, result, reportProgress));
 		}
 		const pool = new AsyncPool(DELETE_CONCURRENCY);
-		await Promise.all(
-			deletes.map((action) =>
-				pool.run(() => executeAction(action, ctx, result, reportProgress))
-			)
-		);
+		// Local directories must wait for descendants. A failed child deletion must
+		// leave a non-empty parent in place rather than recursively deleting that child.
+		const groups = lane === "local"
+			? [...new Set(deletes.map((a) => a.path.split("/").length))]
+				.sort((a, b) => b - a)
+				.map((depth) => deletes.filter((a) => a.path.split("/").length === depth))
+			: [deletes];
+		for (const group of groups) {
+			await control.drain(group.map((action) =>
+				pool.run(() => control.run(() => executeAction(action, ctx, result, reportProgress)))
+			));
+		}
 	};
-	await Promise.all([
-		runLane(renameRemote, deleteRemote),
-		runLane(renameLocal, deleteLocal),
+	await control.drain([
+		runLane(renameRemote, deleteRemote, "remote"),
+		runLane(renameLocal, deleteLocal, "local"),
 	]);
 
 	// ── Phase 4 — empty directory pruning. ──
@@ -355,11 +376,11 @@ async function executeAction(
 		// rename(oldPath, …) against a source the first (successful) attempt already
 		// moved → a spurious not-found failure — so renames run without the retry wrapper.
 		const io = () => runActionIO(action, ctx);
-		const { localEntity, remoteEntity } =
+		const { localEntity, remoteEntity, syncedContent } =
 			ACTION_CLASS[action.action].tier === "rename"
 				? await io()
 				: await withIoRetry(io, ctx, onRateLimit);
-		await commitAction(action, localEntity, remoteEntity, ctx.committer);
+		await commitAction(action, localEntity, remoteEntity, ctx.committer, syncedContent);
 		result.succeeded.push({ action, localEntity, remoteEntity });
 	} catch (err) {
 		if (err instanceof AuthError) throw err;
@@ -378,7 +399,7 @@ async function executeAction(
 async function runActionIO(
 	action: SyncAction,
 	ctx: ExecutionContext,
-): Promise<{ localEntity?: FileEntity; remoteEntity?: FileEntity }> {
+): Promise<{ localEntity?: FileEntity; remoteEntity?: FileEntity; syncedContent?: ArrayBuffer }> {
 	const { localFs, remoteFs } = ctx;
 	const { path } = action;
 
@@ -407,7 +428,7 @@ async function runActionIO(
 			}
 			const remoteEntity = await remoteFs.write(path, content, action.local.mtime);
 			const localEntity = await localEntityForPushedContent(localFs, path, content, action.local);
-			return { localEntity, remoteEntity };
+			return { localEntity, remoteEntity, syncedContent: content };
 		}
 
 		case "pull": {
@@ -425,7 +446,7 @@ async function runActionIO(
 			// stat() may return null if the file was deleted between write and stat (race condition);
 			// fall back to action.remote which is the pre-sync metadata
 			const remoteEntity = await remoteFs.stat(path) ?? action.remote;
-			return { localEntity, remoteEntity };
+			return { localEntity, remoteEntity, syncedContent: content };
 		}
 
 		case "match": {
@@ -456,7 +477,7 @@ async function runActionIO(
 				const localEntity = plannedLocal
 					? await localEntityForPushedContent(localFs, path, content, plannedLocal)
 					: (await localFs.stat(path)) ?? undefined;
-				return { localEntity, remoteEntity };
+				return { localEntity, remoteEntity, syncedContent: content };
 			}
 			const remoteEntity = await remoteFs.stat(path);
 			const localEntity = await localFs.stat(path) ?? action.local;
@@ -475,7 +496,15 @@ async function runActionIO(
 		}
 
 		case "delete_local": {
-			await localFs.delete(path);
+			const current = await assertLocalUnchangedBeforeDelete(localFs, action);
+			if (!current) return {};
+			if (current.isDirectory) {
+				if (!localFs.deleteEmptyDir || !(await localFs.deleteEmptyDir(path))) {
+					throw new LocalChangedDuringSyncError(path);
+				}
+			} else {
+				await localFs.delete(path);
+			}
 			return {};
 		}
 
@@ -513,12 +542,15 @@ async function executeConflictAction(
 		// a fresh `.conflict-N` name, orphaning the first backup. A rate-limited resolve
 		// fails the action and re-resolves next cycle (it runs serially and never feeds
 		// the transfer pool's AIMD).
-		const resolution = await resolveConflict(conflictCtx, ctx.conflictStrategy);
+		const { syncedContent, ...resolution } = await resolveConflict(conflictCtx, ctx.conflictStrategy);
 
-		const localEntity = await ctx.localFs.stat(action.path) ?? action.local;
+		const current = await ctx.localFs.stat(action.path) ?? undefined;
+		const localEntity = syncedContent
+			? await localEntityForSyncedContent(syncedContent, action.path, current)
+			: current ?? action.local;
 		const remoteEntity = await ctx.remoteFs.stat(action.path) ?? action.remote;
 
-		await commitAction(action, localEntity, remoteEntity, ctx.committer);
+		await commitAction(action, localEntity, remoteEntity, ctx.committer, syncedContent);
 
 		result.conflicts.push({ action, resolution, localEntity, remoteEntity });
 		result.succeeded.push({ action, localEntity, remoteEntity });
