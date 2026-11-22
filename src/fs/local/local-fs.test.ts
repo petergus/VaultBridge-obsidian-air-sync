@@ -503,4 +503,72 @@ describe("LocalFs", () => {
 			expect(removeSpy).not.toHaveBeenCalled();
 		});
 	});
+
+	describe("write, mkdir, and deleteEmptyDir safety guards", () => {
+		it("throws local.case_mismatch on write() when file or ancestor folder exists with different case", async () => {
+			const { fs } = createLocalFs();
+			const content = new TextEncoder().encode("data").buffer;
+			await fs.write("APPS/LocalMio/a.md", content, Date.now());
+
+			// Exact file path case mismatch
+			await expect(fs.write("APPS/LocalMio/A.md", content, Date.now())).rejects.toMatchObject({
+				permanent: true,
+				permanentCode: "local.case_mismatch",
+			});
+
+			// Ancestor folder case mismatch on existing descendant
+			await expect(fs.write("Apps/LocalMio/a.md", content, Date.now())).rejects.toMatchObject({
+				permanent: true,
+				permanentCode: "local.case_mismatch",
+			});
+
+			// Ancestor folder case mismatch for a brand new child path
+			await expect(fs.write("Apps/new.md", content, Date.now())).rejects.toMatchObject({
+				permanent: true,
+				permanentCode: "local.case_mismatch",
+			});
+		});
+
+		it("throws local.case_mismatch on mkdir() when folder or ancestor exists with different case", async () => {
+			const { fs } = createLocalFs();
+			await fs.mkdir("APPS");
+
+			await expect(fs.mkdir("Apps")).rejects.toMatchObject({
+				permanent: true,
+				permanentCode: "local.case_mismatch",
+			});
+
+			await expect(fs.mkdir("Apps/LocalMio")).rejects.toMatchObject({
+				permanent: true,
+				permanentCode: "local.case_mismatch",
+			});
+		});
+
+		it("deleteEmptyDir refuses when unindexed files, hidden dirs, or case mismatch exist", async () => {
+			const { vault, fs } = createLocalFs();
+
+			await fs.mkdir("has-unindexed");
+			vi.spyOn(vault.adapter, "list").mockResolvedValueOnce({ files: ["has-unindexed/extra.txt"], folders: [] });
+			expect(await fs.deleteEmptyDir("has-unindexed")).toBe(false);
+			expect(await vault.adapter.exists("has-unindexed")).toBe(true);
+
+			await fs.mkdir("has-hidden");
+			vi.spyOn(vault.adapter, "list").mockResolvedValueOnce({ files: [], folders: ["has-hidden/.git"] });
+			expect(await fs.deleteEmptyDir("has-hidden")).toBe(false);
+			expect(await vault.adapter.exists("has-hidden")).toBe(true);
+
+			await fs.mkdir("CaseFolder");
+			expect(await fs.deleteEmptyDir("casefolder")).toBe(false);
+			expect(await vault.adapter.exists("CaseFolder")).toBe(true);
+
+			await fs.mkdir("truly-empty");
+			expect(await fs.deleteEmptyDir("truly-empty")).toBe(true);
+			expect(await vault.adapter.exists("truly-empty")).toBe(false);
+
+			await fs.mkdir("ds-store-only");
+			await vault.adapter.writeBinary("ds-store-only/.DS_Store", new ArrayBuffer(0));
+			expect(await fs.deleteEmptyDir("ds-store-only")).toBe(true);
+			expect(await vault.adapter.exists("ds-store-only")).toBe(false);
+		});
+	});
 });

@@ -17,6 +17,7 @@ import { ConflictTracker } from "./sync/conflict-tracker";
 import { handleOAuthProtocolCallback } from "./fs/oauth-callback-error";
 import { registerContextMenuHandlers } from "./ui/context-menu";
 import { DeletionReviewModal, detectMovedDestination } from "./ui/deletion-modal";
+import { getBuildTimestamp } from "./build-info";
 
 export default class VaultBridgePlugin extends Plugin {
 	settings!: VaultBridgeSettings;
@@ -56,7 +57,12 @@ export default class VaultBridgePlugin extends Plugin {
 			() => this.settings,
 			deviceName,
 		);
-		this.logger.info("Plugin loaded", { deviceName, vaultId: this.settings.vaultId });
+		this.logger.info("Plugin loaded", {
+			deviceName,
+			vaultId: this.settings.vaultId,
+			version: this.manifest.version,
+			buildTime: getBuildTimestamp(),
+		});
 
 		// Conflict-resolution audit history, written via the same raw adapter + device
 		// name as the logger (it persists to .airsync/conflicts/<device>.json).

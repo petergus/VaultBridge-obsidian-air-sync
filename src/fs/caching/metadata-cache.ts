@@ -90,22 +90,50 @@ export abstract class AbstractMetadataCache<TFile> {
 		return path === INTERNAL_METADATA_PATH;
 	}
 
+	/** If another id occupies `path`, drop its reverse idToPath mapping before overwrite. */
+	private clearDisplacedId(path: string, incomingId: string): void {
+		const displaced = this.pathToFile.get(path);
+		if (displaced === undefined) return;
+		const displacedId = this.extractId(displaced);
+		if (displacedId !== incomingId && this.idToPath.get(displacedId) === path) {
+			this.idToPath.delete(displacedId);
+		}
+	}
+
 	/** Add or update a file in the cache with full index maintenance */
 	setFile(path: string, file: TFile): void {
 		if (this.isReserved(path)) return;
+		const id = this.extractId(file);
+		// Enforce 1:1 id↔path: if this id is already bound to another path, detach the
+		// old path first so pathToFile never accumulates two keys for one remote id.
+		const prevPath = this.idToPath.get(id);
+		if (prevPath !== undefined && prevPath !== path) {
+			const wasFolder = this.folders.has(prevPath);
+			this.removeFromIndex(prevPath);
+			this.pathToFile.delete(prevPath);
+			this.folders.delete(prevPath);
+			if (wasFolder) {
+				this.rewriteChildPaths(prevPath, path);
+			}
+		}
+		this.clearDisplacedId(path, id);
 		const isNew = !this.pathToFile.has(path);
 		this.pathToFile.set(path, file);
-		this.idToPath.set(this.extractId(file), path);
-		if (this.isFolderEntry(file)) {
-			this.folders.add(path);
-		}
+		this.idToPath.set(id, path);
+		if (this.isFolderEntry(file)) this.folders.add(path);
+		else this.folders.delete(path);
 		if (isNew) this.addToIndex(path);
 	}
 
 	/** Remove a single entry from pathToFile/idToPath/folders and the children index */
 	removeEntry(path: string): void {
 		const file = this.pathToFile.get(path);
-		if (file) this.idToPath.delete(this.extractId(file));
+		if (file) {
+			const id = this.extractId(file);
+			if (this.idToPath.get(id) === path) {
+				this.idToPath.delete(id);
+			}
+		}
 		this.removeFromIndex(path);
 		this.pathToFile.delete(path);
 		this.folders.delete(path);
@@ -115,11 +143,18 @@ export abstract class AbstractMetadataCache<TFile> {
 	bulkLoad(items: Iterable<[string, TFile]>): void {
 		for (const [path, file] of items) {
 			if (this.isReserved(path)) continue;
-			this.pathToFile.set(path, file);
-			this.idToPath.set(this.extractId(file), path);
-			if (this.isFolderEntry(file)) {
-				this.folders.add(path);
+			const id = this.extractId(file);
+			const prevPath = this.idToPath.get(id);
+			if (prevPath !== undefined && prevPath !== path) {
+				this.removeFromIndex(prevPath);
+				this.pathToFile.delete(prevPath);
+				this.folders.delete(prevPath);
 			}
+			this.clearDisplacedId(path, id);
+			this.pathToFile.set(path, file);
+			this.idToPath.set(id, path);
+			if (this.isFolderEntry(file)) this.folders.add(path);
+			else this.folders.delete(path);
 		}
 		for (const path of this.pathToFile.keys()) {
 			this.addToIndex(path);

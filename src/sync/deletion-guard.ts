@@ -169,6 +169,7 @@ export function splitPlanAtLimit(
  */
 export function protectFoldersWithSurvivors(plan: SyncPlan): { plan: SyncPlan; protectedFolders: string[] } {
 	const survivorAncestors = new Set<string>();
+	const survivorAncestorsLower = new Set<string>();
 	for (const action of plan.actions) {
 		if (isDeletionAction(action) || action.action === "cleanup") continue;
 		let slash = action.path.lastIndexOf("/");
@@ -176,6 +177,7 @@ export function protectFoldersWithSurvivors(plan: SyncPlan): { plan: SyncPlan; p
 			const ancestor = action.path.substring(0, slash);
 			if (survivorAncestors.has(ancestor)) break;
 			survivorAncestors.add(ancestor);
+			survivorAncestorsLower.add(ancestor.toLowerCase());
 			slash = ancestor.lastIndexOf("/");
 		}
 	}
@@ -183,10 +185,14 @@ export function protectFoldersWithSurvivors(plan: SyncPlan): { plan: SyncPlan; p
 
 	const protectedFolders: string[] = [];
 	const actions = plan.actions.filter((action) => {
-		const entity = action.action === "delete_local" ? action.local
-			: action.action === "delete_remote" ? action.remote
-			: undefined;
-		if (!entity?.isDirectory || !survivorAncestors.has(action.path)) return true;
+		const isLocalDir = action.action === "delete_local" && !!action.local?.isDirectory;
+		const isRemoteDir = action.action === "delete_remote" && !!action.remote?.isDirectory;
+		// Local filesystems (macOS APFS / Windows NTFS) can be case-insensitive, so protect
+		// a local folder deletion against any case-insensitive survivor ancestor too.
+		const matchesSurvivor = isLocalDir
+			? survivorAncestorsLower.has(action.path.toLowerCase())
+			: isRemoteDir && survivorAncestors.has(action.path);
+		if (!matchesSurvivor) return true;
 		protectedFolders.push(action.path);
 		return false;
 	});

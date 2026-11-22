@@ -599,3 +599,58 @@ describe("applyFileChangeDetectMove", () => {
 		expect(result.wasFolder).toBe(false);
 	});
 });
+
+describe("AbstractMetadataCache 1:1 id↔path invariants", () => {
+	it("detaches the old path and rewrites children when setFile binds an existing id to a new path", () => {
+		const cache = makeCache();
+		const f1Old = makeFolder({ id: "F1", name: "Gustafson Group", parents: [ROOT] });
+		cache.setFile("Gustafson Group", f1Old);
+		cache.setFile("Gustafson Group/note.md", makeGoogleDriveFile({ id: "N1", name: "note.md", parents: ["F1"] }));
+
+		const f1New = makeFolder({ id: "F1", name: "GUSTAFSON GROUP", parents: [ROOT] });
+		cache.setFile("GUSTAFSON GROUP", f1New);
+
+		expect(cache.getFile("Gustafson Group")).toBeUndefined();
+		expect(cache.idAt("Gustafson Group")).toBeUndefined();
+		expect(cache.isFolder("Gustafson Group")).toBe(false);
+		expect(cache.getFile("GUSTAFSON GROUP")).toBe(f1New);
+		expect(cache.getPathById("F1")).toBe("GUSTAFSON GROUP");
+		expect(cache.hasFile("Gustafson Group/note.md")).toBe(false);
+		expect(cache.hasFile("GUSTAFSON GROUP/note.md")).toBe(true);
+		expect(cache.getPathById("N1")).toBe("GUSTAFSON GROUP/note.md");
+	});
+
+	it("removeEntry does not wipe idToPath if idToPath is owned by a different path", () => {
+		const cache = makeCache();
+		const f1 = makeGoogleDriveFile({ id: "f1", name: "a.txt", parents: [ROOT] });
+		cache.setFile("a.txt", f1);
+
+		// Simulate an external/legacy path alias in internal map by loading via another id,
+		// or overwriting a path and removing stale mapping
+		const f2 = makeGoogleDriveFile({ id: "f2", name: "a.txt", parents: [ROOT] });
+		cache.setFile("b.txt", f1); // f1 now owned by b.txt
+		// f2 takes a.txt while f1 was moved to b.txt
+		cache.setFile("a.txt", f2);
+		expect(cache.getPathById("f1")).toBe("b.txt");
+		expect(cache.getPathById("f2")).toBe("a.txt");
+
+		cache.removeEntry("a.txt");
+		expect(cache.getPathById("f2")).toBeUndefined();
+		expect(cache.getPathById("f1")).toBe("b.txt");
+	});
+
+	it("bulkLoad deduplicates aliased ids so only one path remains per remote id", () => {
+		const cache = makeCache();
+		const f1 = makeFolder({ id: "F1", name: "Gustafson Group", parents: [ROOT] });
+		const f1Alias = makeFolder({ id: "F1", name: "GUSTAFSON GROUP", parents: [ROOT] });
+		cache.bulkLoad([
+			["Gustafson Group", f1],
+			["GUSTAFSON GROUP", f1Alias],
+		]);
+
+		expect(cache.size).toBe(1);
+		expect(cache.hasFile("Gustafson Group")).toBe(false);
+		expect(cache.getFile("GUSTAFSON GROUP")).toBe(f1Alias);
+		expect(cache.getPathById("F1")).toBe("GUSTAFSON GROUP");
+	});
+});

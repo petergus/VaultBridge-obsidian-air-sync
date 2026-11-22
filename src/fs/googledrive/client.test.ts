@@ -313,3 +313,80 @@ describe("GoogleDriveClient 401 retry", () => {
 		mockRequestUrl.mockRestore();
 	});
 });
+
+describe("GoogleDriveClient.findChildByName exact-case matching", () => {
+	it("ignores a case-mismatched folder when searching for exact case", async () => {
+		const mockRequestUrl = (await spyRequestUrl()).mockResolvedValue(
+			mockRes({
+				files: [
+					{
+						id: "f-old",
+						name: "Gustafson Group",
+						mimeType: "application/vnd.google-apps.folder",
+						parents: ["parent1"],
+					},
+				],
+			}),
+		);
+
+		const { GoogleDriveClient } = await import("./client");
+		const client = new GoogleDriveClient(() => Promise.resolve("access"));
+
+		const found = await client.findChildByName("parent1", "GUSTAFSON GROUP", "application/vnd.google-apps.folder");
+		expect(found).toBeNull();
+
+		const reqUrl = String((mockRequestUrl.mock.calls[0]![0] as { url: string }).url);
+		expect(reqUrl).toContain("pageSize=100");
+		mockRequestUrl.mockRestore();
+	});
+
+	it("picks the exact-case match when both case variants exist", async () => {
+		const mockRequestUrl = (await spyRequestUrl()).mockResolvedValue(
+			mockRes({
+				files: [
+					{
+						id: "f-old",
+						name: "Gustafson Group",
+						mimeType: "application/vnd.google-apps.folder",
+						parents: ["parent1"],
+					},
+					{
+						id: "f-new",
+						name: "GUSTAFSON GROUP",
+						mimeType: "application/vnd.google-apps.folder",
+						parents: ["parent1"],
+					},
+				],
+			}),
+		);
+
+		const { GoogleDriveClient } = await import("./client");
+		const client = new GoogleDriveClient(() => Promise.resolve("access"));
+
+		const found = await client.findChildByName("parent1", "GUSTAFSON GROUP", "application/vnd.google-apps.folder");
+		expect(found?.id).toBe("f-new");
+		mockRequestUrl.mockRestore();
+	});
+});
+
+describe("GoogleDriveClient.hasChildren", () => {
+	it("returns true when Drive returns a child and false when empty", async () => {
+		let call = 0;
+		const mockRequestUrl = (await spyRequestUrl()).mockImplementation(() => {
+			call++;
+			if (call === 1) {
+				return Promise.resolve(mockRes({
+					files: [{ id: "c1", name: "child.md", mimeType: "text/markdown" }],
+				}));
+			}
+			return Promise.resolve(mockRes({ files: [] }));
+		});
+
+		const { GoogleDriveClient } = await import("./client");
+		const client = new GoogleDriveClient(() => Promise.resolve("access"));
+
+		expect(await client.hasChildren("folder1")).toBe(true);
+		expect(await client.hasChildren("folder1")).toBe(false);
+		mockRequestUrl.mockRestore();
+	});
+});

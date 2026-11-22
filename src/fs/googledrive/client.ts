@@ -79,7 +79,7 @@ export class GoogleDriveClient {
 		}
 	}
 
-	/** Find a child file/folder by name under a parent */
+	/** Find a child file/folder by exact-case name under a parent */
 	async findChildByName(
 		parentId: string,
 		name: string,
@@ -91,17 +91,35 @@ export class GoogleDriveClient {
 		if (mimeType) {
 			q += ` and mimeType = '${mimeType}'`;
 		}
+		// Google Drive's `name =` operator is case-insensitive; fetch a full page
+		// and verify exact-case equality so case-variant siblings never alias.
 		const params = new URLSearchParams({
 			q,
 			fields: `files(${FILE_FIELDS})`,
-			pageSize: "1",
+			pageSize: "100",
 		});
 		const response = await this.request("findChildByName", {
 			url: `${GOOGLE_DRIVE_API}/files?${params.toString()}`,
 		});
 		const result: unknown = response.json;
 		assertGoogleDriveFileList(result);
-		return result.files[0] ?? null;
+		return result.files.find((f) => f.name === name) ?? null;
+	}
+
+	/** Check whether a folder currently has any non-trashed children on Google Drive */
+	async hasChildren(folderId: string): Promise<boolean> {
+		const escapedId = folderId.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+		const params = new URLSearchParams({
+			q: `'${escapedId}' in parents and trashed = false`,
+			fields: "files(id,name,mimeType)",
+			pageSize: "1",
+		});
+		const response = await this.request("hasChildren", {
+			url: `${GOOGLE_DRIVE_API}/files?${params.toString()}`,
+		});
+		const result: unknown = response.json;
+		assertGoogleDriveFileList(result);
+		return result.files.length > 0;
 	}
 
 	/** Get a file's metadata by ID */

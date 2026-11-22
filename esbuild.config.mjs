@@ -10,6 +10,9 @@ if you want to view the source, please visit the github repository of this plugi
 `;
 
 const prod = (process.argv[2] === "production");
+const now = new Date();
+const pad = (n) => String(n).padStart(2, "0");
+const buildTime = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
 const context = await esbuild.context({
 	banner: {
@@ -17,6 +20,9 @@ const context = await esbuild.context({
 	},
 	entryPoints: ["src/main.ts"],
 	bundle: true,
+	define: {
+		__VAULTBRIDGE_BUILD_TIME__: JSON.stringify(buildTime),
+	},
 	external: [
 		"obsidian",
 		"electron",

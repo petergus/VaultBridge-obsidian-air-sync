@@ -264,6 +264,34 @@ export class GoogleDriveFs extends CachingRemoteFs<GoogleDriveFile> {
 		});
 	}
 
+	/**
+	 * Delete a remote directory only after confirming it is empty both in the
+	 * metadata cache and on Google Drive itself (live `hasChildren` check).
+	 */
+	async deleteEmptyDir(path: string): Promise<boolean> {
+		path = normalizeSyncPath(path);
+		const folderId = await this.cacheMutex.run(async () => {
+			await this.ensureInitialized();
+			if (!this.cache.isFolder(path)) return null;
+			const kids = this.cache.getChildren(path);
+			if (kids && kids.size > 0) return null;
+			const id = this.cache.idAt(path);
+			if (!id || this.cache.getPathById(id) !== path) return null;
+			return id;
+		});
+		if (!folderId) return false;
+
+		if (typeof this.client.hasChildren === "function") {
+			if (await this.client.hasChildren(folderId)) {
+				this.logger?.warn("Skipping prune of non-empty remote directory", { path, folderId });
+				return false;
+			}
+		}
+
+		await this.delete(path);
+		return true;
+	}
+
 	/** Ensure a folder exists by path, creating parents as needed */
 	private async ensureFolder(path: string): Promise<string> {
 		const existing = this.cache.getFile(path);
@@ -285,9 +313,10 @@ export class GoogleDriveFs extends CachingRemoteFs<GoogleDriveFile> {
 				throw new Error(`Cannot create directory "${path}": "${currentPath}" is a file`);
 			} else {
 				// Guard against Google Drive's same-name folder creation:
-				// check Google Drive before creating a potentially duplicate folder
+				// check Google Drive before creating a potentially duplicate folder.
+				// Require exact case equality so case-variant folders never alias.
 				const existing = await this.client.findChildByName(parentId, part, FOLDER_MIME);
-				if (existing) {
+				if (existing && existing.name === part) {
 					this.cache.setFile(currentPath, existing);
 					parentId = existing.id;
 				} else {

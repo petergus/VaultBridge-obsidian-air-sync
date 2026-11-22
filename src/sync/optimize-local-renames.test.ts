@@ -698,3 +698,180 @@ describe("optimizeHeuristicRenames", () => {
 	});
 });
 
+describe("optimizeLocalFileRenames — nested folder coalescence & non-empty folder guards", () => {
+	function dirEntity(path: string): FileEntity {
+		return { path, isDirectory: true, size: 0, mtime: 1000, hash: "" };
+	}
+
+	it("coalesces only the shallowest ancestor folder rename when nested folder pairs exist", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "OldRoot",
+				action: "delete_remote",
+				remote: dirEntity("OldRoot"),
+				baseline: baseline("OldRoot", ""),
+			},
+			{
+				path: "OldRoot/sub",
+				action: "delete_remote",
+				remote: dirEntity("OldRoot/sub"),
+				baseline: baseline("OldRoot/sub", ""),
+			},
+			{
+				path: "OldRoot/top.md",
+				action: "delete_remote",
+				remote: entity("OldRoot/top.md", "h-top"),
+				baseline: baseline("OldRoot/top.md", "h-top"),
+			},
+			{
+				path: "OldRoot/sub/deep.md",
+				action: "delete_remote",
+				remote: entity("OldRoot/sub/deep.md", "h-deep"),
+				baseline: baseline("OldRoot/sub/deep.md", "h-deep"),
+			},
+			{
+				path: "NewRoot",
+				action: "push",
+				local: dirEntity("NewRoot"),
+			},
+			{
+				path: "NewRoot/sub",
+				action: "push",
+				local: dirEntity("NewRoot/sub"),
+			},
+			{
+				path: "NewRoot/top.md",
+				action: "push",
+				local: entity("NewRoot/top.md", "h-top"),
+			},
+			{
+				path: "NewRoot/sub/deep.md",
+				action: "push",
+				local: entity("NewRoot/sub/deep.md", "h-deep"),
+			},
+		];
+
+		const folderPairs = new Map([
+			["NewRoot/sub", "OldRoot/sub"],
+			["NewRoot", "OldRoot"],
+		]);
+		const filePairs = new Map([
+			["NewRoot/top.md", "OldRoot/top.md"],
+			["NewRoot/sub/deep.md", "OldRoot/sub/deep.md"],
+		]);
+		const coalesced = coalesceLocalFolderRenames(actions, folderPairs, filePairs);
+		const result = optimizeLocalFileRenames(coalesced.actions, coalesced.remainingFileRenames);
+		const folderRenames = result.actions.filter(
+			(a) => a.action === "rename_remote" && "isFolder" in a && a.isFolder,
+		);
+		expect(folderRenames).toHaveLength(1);
+		expect(folderRenames[0]).toMatchObject({
+			action: "rename_remote",
+			oldPath: "OldRoot",
+			path: "NewRoot",
+			isFolder: true,
+		});
+		expect(result.actions.filter((a) => a.action === "rename_remote")).toHaveLength(1);
+	});
+
+	it("does not emit standalone non-empty folder rename_remote when coalescing is skipped, while allowing empty folder renames", () => {
+		const actions: SyncAction[] = [
+			{
+				path: "src/SameName",
+				action: "delete_remote",
+				remote: dirEntity("src/SameName"),
+				baseline: baseline("src/SameName", ""),
+			},
+			{
+				path: "src/SameName/sub",
+				action: "delete_remote",
+				remote: dirEntity("src/SameName/sub"),
+				baseline: baseline("src/SameName/sub", ""),
+			},
+			{
+				path: "src/SameName/emptyChild",
+				action: "delete_remote",
+				remote: dirEntity("src/SameName/emptyChild"),
+				baseline: baseline("src/SameName/emptyChild", ""),
+			},
+			{
+				path: "src/SameName/sub/same.md",
+				action: "delete_remote",
+				remote: entity("src/SameName/sub/same.md", "h-same"),
+				baseline: baseline("src/SameName/sub/same.md", "h-same"),
+			},
+			{
+				path: "src/SameName/sub/edited.md",
+				action: "delete_remote",
+				remote: entity("src/SameName/sub/edited.md", "h-old"),
+				baseline: baseline("src/SameName/sub/edited.md", "h-old"),
+			},
+			{
+				path: "dst/SameName",
+				action: "push",
+				local: dirEntity("dst/SameName"),
+			},
+			{
+				path: "dst/SameName/sub",
+				action: "push",
+				local: dirEntity("dst/SameName/sub"),
+			},
+			{
+				path: "dst/SameName/emptyChild",
+				action: "push",
+				local: dirEntity("dst/SameName/emptyChild"),
+			},
+			{
+				path: "dst/SameName/sub/same.md",
+				action: "push",
+				local: entity("dst/SameName/sub/same.md", "h-same"),
+			},
+			{
+				path: "dst/SameName/sub/edited.md",
+				action: "push",
+				local: entity("dst/SameName/sub/edited.md", "h-new"),
+			},
+		];
+
+		const folderPairs = new Map([
+			["dst/SameName", "src/SameName"],
+			["dst/SameName/sub", "src/SameName/sub"],
+			["dst/SameName/emptyChild", "src/SameName/emptyChild"],
+		]);
+		const filePairs = new Map([
+			["dst/SameName/sub/same.md", "src/SameName/sub/same.md"],
+			["dst/SameName/sub/edited.md", "src/SameName/sub/edited.md"],
+		]);
+		const coalesced = coalesceLocalFolderRenames(actions, folderPairs, filePairs);
+		const result = optimizeLocalFileRenames(coalesced.actions, coalesced.remainingFileRenames);
+		const folderRenames = result.actions.filter(
+			(a) => a.action === "rename_remote" && "isFolder" in a && a.isFolder,
+		);
+		expect(folderRenames).toEqual([
+			expect.objectContaining({
+				action: "rename_remote",
+				oldPath: "src/SameName/emptyChild",
+				path: "dst/SameName/emptyChild",
+				isFolder: true,
+			}),
+		]);
+		expect(result.actions).toContainEqual(
+			expect.objectContaining({
+				action: "rename_remote",
+				oldPath: "src/SameName/sub/same.md",
+				path: "dst/SameName/sub/same.md",
+			}),
+		);
+	});
+
+	it("optimizeLocalFileRenames drops standalone directory rename pairs when child actions exist", () => {
+		const actions: SyncAction[] = [
+			{ path: "OldDir", action: "delete_remote", remote: dirEntity("OldDir") },
+			{ path: "NewDir", action: "push", local: dirEntity("NewDir") },
+			{ path: "NewDir/child.md", action: "push", local: entity("NewDir/child.md", "h1") },
+		];
+		const result = optimizeLocalFileRenames(actions, new Map([["NewDir", "OldDir"]]));
+		expect(result.actions.filter((a) => a.action === "rename_remote")).toHaveLength(0);
+	});
+});
+

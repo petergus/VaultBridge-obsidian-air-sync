@@ -1194,3 +1194,104 @@ describe("GoogleDriveFs getWebUrl", () => {
 		expect(await fs.getWebUrl("NonExistentFolder")).toBeNull();
 	});
 });
+
+describe("GoogleDriveFs case-variant folder isolation and deleteEmptyDir", () => {
+	const FOLDER = "application/vnd.google-apps.folder";
+
+	it("does not alias a case-variant folder during ensureFolder; deleting old case preserves new folder and file", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const createFolder = vi.fn().mockResolvedValue({
+			id: "F2",
+			name: "GUSTAFSON GROUP",
+			mimeType: FOLDER,
+			parents: ["root"],
+		});
+		const uploadFile = vi.fn().mockResolvedValue({
+			id: "file-new",
+			name: "file.md",
+			mimeType: "text/markdown",
+			parents: ["F2"],
+			size: "5",
+			modifiedTime: "2026-11-20T20:00:00.000Z",
+		});
+		const deleteFile = vi.fn().mockResolvedValue(undefined);
+		const mockClient = {
+			listAllFiles: vi.fn().mockResolvedValue([
+				{ id: "F1", name: "Gustafson Group", mimeType: FOLDER, parents: ["root"] },
+			]),
+			getChangesStartToken: vi.fn().mockResolvedValue("token1"),
+			// Simulate Drive returning case-variant folder if findChildByName were case-insensitive
+			findChildByName: vi.fn().mockResolvedValue({
+				id: "F1",
+				name: "Gustafson Group",
+				mimeType: FOLDER,
+				parents: ["root"],
+			}),
+			createFolder,
+			uploadFile,
+			deleteFile,
+			hasChildren: vi.fn().mockResolvedValue(false),
+		} as never;
+
+		const fs = new GoogleDriveFs(mockClient, "root");
+		await fs.list();
+
+		await fs.write("GUSTAFSON GROUP/file.md", new TextEncoder().encode("hello").buffer.slice(0), 1000);
+
+		expect(createFolder).toHaveBeenCalledWith("GUSTAFSON GROUP", "root");
+		expect(uploadFile).toHaveBeenCalledWith("file.md", "F2", expect.any(ArrayBuffer), "application/octet-stream", undefined, 1000);
+
+		await fs.delete("Gustafson Group");
+		expect(deleteFile).toHaveBeenCalledTimes(1);
+		expect(deleteFile).toHaveBeenCalledWith("F1");
+
+		expect(await fs.stat("GUSTAFSON GROUP")).not.toBeNull();
+		expect(await fs.stat("GUSTAFSON GROUP/file.md")).not.toBeNull();
+		expect(await fs.stat("Gustafson Group")).toBeNull();
+	});
+
+	it("deleteEmptyDir refuses to delete when live hasChildren returns true even if cache appears empty", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const deleteFile = vi.fn().mockResolvedValue(undefined);
+		const hasChildren = vi.fn().mockResolvedValue(true);
+		const mockClient = {
+			listAllFiles: vi.fn().mockResolvedValue([
+				{ id: "F1", name: "EmptyLooking", mimeType: FOLDER, parents: ["root"] },
+			]),
+			getChangesStartToken: vi.fn().mockResolvedValue("token1"),
+			deleteFile,
+			hasChildren,
+		} as never;
+
+		const fs = new GoogleDriveFs(mockClient, "root");
+		await fs.list();
+
+		const deleted = await fs.deleteEmptyDir("EmptyLooking");
+		expect(deleted).toBe(false);
+		expect(hasChildren).toHaveBeenCalledWith("F1");
+		expect(deleteFile).not.toHaveBeenCalled();
+	});
+
+	it("deleteEmptyDir deletes the folder and returns true when both cache and live Drive confirm empty", async () => {
+		const { GoogleDriveFs } = await import("./index");
+		const deleteFile = vi.fn().mockResolvedValue(undefined);
+		const hasChildren = vi.fn().mockResolvedValue(false);
+		const mockClient = {
+			listAllFiles: vi.fn().mockResolvedValue([
+				{ id: "F1", name: "TrulyEmpty", mimeType: FOLDER, parents: ["root"] },
+			]),
+			getChangesStartToken: vi.fn().mockResolvedValue("token1"),
+			deleteFile,
+			hasChildren,
+		} as never;
+
+		const fs = new GoogleDriveFs(mockClient, "root");
+		await fs.list();
+
+		const deleted = await fs.deleteEmptyDir("TrulyEmpty");
+		expect(deleted).toBe(true);
+		expect(hasChildren).toHaveBeenCalledWith("F1");
+		expect(deleteFile).toHaveBeenCalledWith("F1");
+		expect(await fs.stat("TrulyEmpty")).toBeNull();
+	});
+});

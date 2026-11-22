@@ -1212,6 +1212,81 @@ describe("SyncOrchestrator", () => {
 			await orchestrator.close();
 		});
 
+		it("quarantines repeated local.case_mismatch pull failures and stops cold scans", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			addFile(localFs, "synced.md", "kept", 1000);
+			addFile(remoteFs, "synced.md", "kept", 1000);
+			addFile(remoteFs, "Apps/LocalMio/a.md", "remote-content", 1000);
+
+			let committed = false;
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn(() => Promise.resolve(true));
+			remoteFs.checkpoint!.getChangedPaths = vi.fn(() =>
+				Promise.resolve({
+					modified: committed ? [] : ["Apps/LocalMio/a.md"],
+					deleted: [],
+				}),
+			);
+			const commitSpy = vi.fn(() => {
+				committed = true;
+				return Promise.resolve();
+			});
+			remoteFs.checkpoint!.commitCheckpoint = commitSpy;
+
+			const caseMismatchErr = Object.assign(
+				new Error("Local case mismatch: Apps/LocalMio/a.md conflicts with APPS/LocalMio/a.md"),
+				{ permanent: true as const, permanentCode: "local.case_mismatch" },
+			);
+			const writeSpy = vi.spyOn(localFs, "write").mockRejectedValue(caseMismatchErr);
+			const readSpy = vi.spyOn(remoteFs, "read");
+			const listSpy = vi.spyOn(remoteFs, "list");
+
+			const settings = baseMockSettings({
+				backendType: "none",
+				vaultId: `test-${Math.random()}`,
+				showSyncNotifications: true,
+			});
+
+			const deps = createDeps({
+				getSettings: () => settings,
+				localFs: () => localFs,
+				remoteFs: () => remoteFs,
+				backendProvider: () => null,
+			});
+			const orchestrator = new SyncOrchestrator(deps);
+			await orchestrator.state.put({
+				path: "synced.md",
+				hash: "",
+				localMtime: 1000,
+				remoteMtime: 1000,
+				localSize: 4,
+				remoteSize: 4,
+				syncedAt: 900,
+			});
+
+			// Run 1 (warm): pulls via delta, fails #1 -> triggers cold recovery
+			await orchestrator.runSync();
+			// Run 2 (cold): pulls again, fails #2 -> quarantines & clears cold recovery
+			await orchestrator.runSync();
+			// Run 3 (warm): delta replays path, blocked by quarantine -> commits checkpoint
+			await orchestrator.runSync();
+
+			expect(writeSpy).toHaveBeenCalledTimes(2);
+			expect(readSpy).toHaveBeenCalledTimes(2);
+			expect(listSpy).toHaveBeenCalledTimes(1);
+			expect(commitSpy).toHaveBeenCalledTimes(1);
+			expect(deps.onStatusChange).toHaveBeenCalledWith("partial_error");
+			expect(deps.notify).toHaveBeenLastCalledWith("Sync: 1 blocked");
+
+			// Run 4 (warm): committed cursor has no new changes -> clean settle
+			await orchestrator.runSync();
+			expect(writeSpy).toHaveBeenCalledTimes(2);
+			expect(readSpy).toHaveBeenCalledTimes(2);
+			expect(listSpy).toHaveBeenCalledTimes(1);
+			expect(deps.notify).toHaveBeenLastCalledWith("Everything up to date");
+			await orchestrator.close();
+		});
+
 		/**
 		 * The cursor commits atomically with the file map INSIDE commitCheckpoint (one
 		 * IndexedDB transaction — ADR 0001). If that flush fails it must propagate so

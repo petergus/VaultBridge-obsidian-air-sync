@@ -67,6 +67,18 @@ export function optimizeLocalFileRenames(
 		}
 
 		if (push.local?.isDirectory && (del.remote?.isDirectory || del.baseline)) {
+			const oldPrefix = oldPath + "/";
+			const newPrefix = newPath + "/";
+			const hasChildAction = actions.some(
+				(a) => a.path.startsWith(oldPrefix) || a.path.startsWith(newPrefix),
+			);
+			if (hasChildAction) {
+				skipped.push({ pair: { oldPath, newPath }, reason: "action_type_mismatch" });
+				logger?.debug("Local rename optimization skipped", {
+					newPath, oldPath, reason: "action_type_mismatch",
+				});
+				continue;
+			}
 			renamed.push({
 				path: newPath,
 				action: "rename_remote",
@@ -158,7 +170,19 @@ export function coalesceLocalFolderRenames(
 	const applied: RenamePair[] = [];
 	const skipped: SkippedRename[] = [];
 
-	for (const [newFolder, oldFolder] of folderRenamePairs) {
+	const sortedFolderPairs = [...folderRenamePairs.entries()].sort(
+		(a, b) => a[1].split("/").length - b[1].split("/").length,
+	);
+
+	for (const [newFolder, oldFolder] of sortedFolderPairs) {
+		if (consumed.has(oldFolder) || consumed.has(newFolder)) continue;
+		if (
+			applied.some(
+				(p) => oldFolder.startsWith(p.oldPath + "/") && newFolder.startsWith(p.newPath + "/"),
+			)
+		) {
+			continue;
+		}
 		const oldPrefix = oldFolder + "/";
 		const newPrefix = newFolder + "/";
 
@@ -259,22 +283,37 @@ export function coalesceLocalFolderRenames(
 		if (!consumedFileRenames.has(newPath)) remaining.set(newPath, oldPath);
 	}
 
+	const hasChildActionsUnder = (prefix: string): boolean =>
+		actions.some((a) => !consumed.has(a.path) && a.path.startsWith(prefix));
+
 	// For skipped folders, provide any discovered candidate pairs that weren't consumed
 	// so that optimizeLocalFileRenames can still optimize valid individual files as file renames
-	for (const { pair } of skipped) {
+	for (const { pair, reason } of skipped) {
 		const oldPrefix = pair.oldPath + "/";
 		const newPrefix = pair.newPath + "/";
 		for (const a of actions) {
 			if (a.action === "delete_remote" && a.path.startsWith(oldPrefix)) {
 				const suffix = a.path.substring(oldPrefix.length);
 				const expectedNew = newPrefix + suffix;
-				if (!consumed.has(a.path) && !consumed.has(expectedNew) && !remaining.has(expectedNew)) {
-					remaining.set(expectedNew, a.path);
+				if (consumed.has(a.path) || consumed.has(expectedNew) || remaining.has(expectedNew)) {
+					continue;
 				}
+				const isDir = !!(a.remote?.isDirectory || byPath.get(expectedNew)?.local?.isDirectory);
+				if (isDir && (hasChildActionsUnder(a.path + "/") || hasChildActionsUnder(expectedNew + "/"))) {
+					continue;
+				}
+				remaining.set(expectedNew, a.path);
 			}
 		}
-		// Also pair the root folder itself if both old delete_remote and new push exist
-		if (!consumed.has(pair.oldPath) && !consumed.has(pair.newPath) && !remaining.has(pair.newPath)) {
+		// Pair the root folder itself only when it is genuinely empty (no_descendants and no child actions)
+		if (
+			reason === "no_descendants" &&
+			!hasChildActionsUnder(oldPrefix) &&
+			!hasChildActionsUnder(newPrefix) &&
+			!consumed.has(pair.oldPath) &&
+			!consumed.has(pair.newPath) &&
+			!remaining.has(pair.newPath)
+		) {
 			const oldDel = byPath.get(pair.oldPath);
 			const newPush = byPath.get(pair.newPath);
 			if (oldDel?.action === "delete_remote" && newPush?.action === "push") {

@@ -80,6 +80,15 @@ export interface IFileSystem {
 	delete(path: string): Promise<void>;
 
 	/**
+	 * Delete a directory ONLY after confirming it is empty against the
+	 * authoritative backing store (not solely an in-memory cache or vault index).
+	 * Returns true if the directory was deleted, false if it does not exist,
+	 * is not a directory, still contains any children (including hidden/unindexed
+	 * items), or has a case mismatch.
+	 */
+	deleteEmptyDir?(path: string): Promise<boolean>;
+
+	/**
 	 * Rename / move a file or directory (including children).
 	 *
 	 * Parent directories are created automatically.

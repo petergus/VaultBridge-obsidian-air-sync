@@ -47,7 +47,7 @@ class FailedActionTracker {
 	private readonly entries = new Map<string, FailedActionEntry>();
 
 	isBlocked(backendType: string, action: SyncAction, now = Date.now()): string | null {
-		if (!isBlockableLocalOriginAction(action)) return null;
+		if (!isBlockableCandidateAction(action)) return null;
 		this.expire(now);
 		const prefix = this.actionPrefix(backendType, action);
 		const fingerprint = actionFingerprint(action);
@@ -74,10 +74,10 @@ class FailedActionTracker {
 		classification: ErrorClassification,
 		now = Date.now(),
 	): void {
-		if (!isBlockableLocalOriginAction(failed.action)) return;
+		if (!isBlockableCandidateAction(failed.action)) return;
 		this.expire(now);
 		const failureCode = quarantineFailureCode(classification);
-		if (!failureCode) {
+		if (!failureCode || !isBlockableFailure(failed.action, failureCode)) {
 			this.clearAction(backendType, failed.action);
 			return;
 		}
@@ -104,9 +104,8 @@ class FailedActionTracker {
 		classification: ErrorClassification,
 		now = Date.now(),
 	): boolean {
-		if (!isBlockableLocalOriginAction(failed.action)) return false;
 		const failureCode = quarantineFailureCode(classification);
-		if (!failureCode) return false;
+		if (!failureCode || !isBlockableFailure(failed.action, failureCode)) return false;
 		const entry = this.entries.get(this.key(backendType, failed.action, failureCode));
 		return !!entry && entry.actionFingerprint === actionFingerprint(failed.action) && entry.blockedUntil > now;
 	}
@@ -133,8 +132,13 @@ class FailedActionTracker {
 	}
 }
 
-function isBlockableLocalOriginAction(action: SyncAction): boolean {
-	return BLOCKABLE_LOCAL_ORIGIN_ACTIONS.has(action.action);
+function isBlockableCandidateAction(action: SyncAction): boolean {
+	return BLOCKABLE_LOCAL_ORIGIN_ACTIONS.has(action.action) || action.action === "pull";
+}
+
+function isBlockableFailure(action: SyncAction, failureCode: string | null): boolean {
+	return BLOCKABLE_LOCAL_ORIGIN_ACTIONS.has(action.action) ||
+		(action.action === "pull" && failureCode === "local.case_mismatch");
 }
 
 function quarantineFailureCode(classification: ErrorClassification): string | null {
@@ -168,7 +172,11 @@ function entityFingerprint(entity: SyncAction["local"]): unknown {
 		isDirectory: entity.isDirectory,
 		size: entity.size,
 		mtime: entity.mtime,
-		hash: entity.hash,
+		// Omit `hash`: list() leaves hash "" (ADR 0005) while stat() computes it,
+		// which would otherwise reset quarantine across hot/warm ↔ cold transitions.
+		remoteChecksum: entity.remoteChecksum
+			? `${entity.remoteChecksum.algo}:${entity.remoteChecksum.value}`
+			: undefined,
 	};
 }
 

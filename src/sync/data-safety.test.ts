@@ -173,6 +173,30 @@ describe("deletion guards", () => {
 		expect(protectedFolders).toEqual(["P"]);
 		expect(plan.actions.map((a) => a.path)).toEqual(["P/new.md", "Q", "Q/old.md", "P2/x.md"]);
 	});
+
+	it("drops delete_local on a case-variant folder when a descendant survives under different casing", () => {
+		const dir = {
+			path: "02-projects/Active Projects/Gustafson Group",
+			isDirectory: true,
+			size: 0,
+			mtime: 0,
+			hash: "",
+		};
+		const { plan, protectedFolders } = protectFoldersWithSurvivors({
+			actions: [
+				{
+					path: "02-projects/Active Projects/Gustafson Group",
+					action: "delete_local",
+					local: dir,
+				},
+				{ path: "02-projects/Active Projects/GUSTAFSON GROUP/note.md", action: "push" },
+			],
+		});
+		expect(protectedFolders).toEqual(["02-projects/Active Projects/Gustafson Group"]);
+		expect(plan.actions.map((a) => a.path)).toEqual([
+			"02-projects/Active Projects/GUSTAFSON GROUP/note.md",
+		]);
+	});
 });
 
 describe("orchestrator deletion safety", () => {

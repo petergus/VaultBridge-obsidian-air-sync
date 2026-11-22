@@ -6,6 +6,7 @@ import { getBackendSettingsRenderer } from "./backend-settings";
 import { parseLines } from "../utils/parse-lines";
 import { renderConfigSyncSettings } from "./config-sync-settings";
 import { detectMovedDestination } from "./deletion-modal";
+import { formatPluginBuildInfo } from "../build-info";
 
 export class VaultBridgeSettingTab extends PluginSettingTab {
 	plugin: VaultBridgePlugin;
@@ -34,6 +35,13 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 	renderContent(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+
+		const version = (this.plugin.manifest as { version?: string } | undefined)?.version;
+		if (version) {
+			containerEl
+				.createDiv({ cls: "vaultbridge-version-info" })
+				.setText(formatPluginBuildInfo(version));
+		}
 
 		// Active conflicts panel
 		const conflictsContainer = containerEl.createDiv("sync-conflicts-settings-container");

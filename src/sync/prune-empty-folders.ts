@@ -45,10 +45,16 @@ export async function pruneEmptyParentFolders(
 		let current = folderPath;
 		while (current) {
 			try {
-				const children = await fs.listDir(current);
-				if (children.length > 0) break;
-				ctx.logger?.debug(`Pruning empty directory: ${current}`);
-				await fs.delete(current);
+				if (fs.deleteEmptyDir) {
+					const deleted = await fs.deleteEmptyDir(current);
+					if (!deleted) break;
+					ctx.logger?.debug(`Pruning empty directory: ${current}`);
+				} else {
+					const children = await fs.listDir(current);
+					if (children.length > 0) break;
+					ctx.logger?.debug(`Pruning empty directory: ${current}`);
+					await fs.delete(current);
+				}
 				current = current.substring(0, current.lastIndexOf("/"));
 			} catch {
 				break;
