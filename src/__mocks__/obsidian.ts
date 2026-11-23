@@ -214,6 +214,7 @@ export class Setting {
 		const btn = {
 			setButtonText: (_t: string) => btn,
 			setWarning: () => btn,
+			setDisabled: (_disabled: boolean) => btn,
 			setCta: () => btn,
 			setClass: (_c: string) => btn,
 			onClick: (h: () => void) => {

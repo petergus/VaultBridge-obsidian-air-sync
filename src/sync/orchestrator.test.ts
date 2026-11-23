@@ -1454,6 +1454,44 @@ describe("SyncOrchestrator", () => {
 	});
 
 	describe("approvePendingDeletions()", () => {
+		it("preserves an approval submitted while another plan is executing", async () => {
+			const localFs = createMockFs("local");
+			const remoteFs = createMockFs("remote");
+			const settings = { ...mockSettings(), maxDeletionsPerSync: 1 };
+			remoteFs.checkpoint!.hasCheckpoint = vi.fn().mockResolvedValue(true);
+			const onDeletionsHeld = vi.fn();
+			const deps = createDeps({
+				getSettings: () => settings, localFs: () => localFs,
+				remoteFs: () => remoteFs, onDeletionsHeld,
+			});
+			const orchestrator = new SyncOrchestrator(deps);
+			for (const path of ["a.md", "b.md"]) {
+				addFile(remoteFs, path, "body", 1000);
+				await orchestrator.state.put({
+					path, hash: "", localMtime: 1000, remoteMtime: 1000,
+					localSize: 4, remoteSize: 4, syncedAt: 900,
+				});
+			}
+			await orchestrator.runSync();
+			expect(orchestrator.getPendingDeletions()).toHaveLength(2);
+			addFile(localFs, "new.md", "new content", 2000);
+			deps.localTracker.markDirty("new.md");
+			const write = remoteFs.write.bind(remoteFs);
+			vi.spyOn(remoteFs, "write").mockImplementationOnce(async (...args) => {
+				await orchestrator.approvePendingDeletions();
+				return write(...args);
+			});
+			await orchestrator.runSync();
+			expect(remoteFs.files.has("new.md")).toBe(true);
+			expect(remoteFs.files.has("a.md")).toBe(false);
+			expect(remoteFs.files.has("b.md")).toBe(false);
+			expect(orchestrator.getPendingDeletions()).toHaveLength(0);
+			expect(onDeletionsHeld).toHaveBeenCalledTimes(1);
+			await orchestrator.runSync();
+			expect(orchestrator.getPendingDeletions()).toHaveLength(0);
+			await orchestrator.close();
+		});
+
 		it("executes quarantined deletions and clears the pending list", async () => {
 			const localFs = createMockFs("local");
 			const remoteFs = createMockFs("remote");

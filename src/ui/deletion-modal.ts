@@ -1,4 +1,4 @@
-import type { App, TAbstractFile } from "obsidian";
+import type { App, TAbstractFile, TFile } from "obsidian";
 import { Modal, Notice, Setting, TFolder } from "obsidian";
 import type { SyncOrchestrator } from "../sync/orchestrator";
 import type { IFileSystem } from "../fs/interface";
@@ -37,6 +37,7 @@ type DeletionFilter = "all" | "moved" | "server" | "local";
 export function detectMovedDestination(
 	app: App | undefined,
 	action: SyncAction,
+	filesByName?: ReadonlyMap<string, readonly TFile[]>,
 ): string | null {
 	if (!app || !app.vault) return null;
 	if (action.action !== "delete_remote") return null;
@@ -46,7 +47,7 @@ export function detectMovedDestination(
 	if (!filename) return null;
 
 	// Check all files currently in the vault
-	const allFiles = app.vault.getFiles?.() ?? [];
+	const allFiles = filesByName?.get(filename) ?? (filesByName ? [] : app.vault.getFiles?.() ?? []);
 	const candidates = allFiles.filter((f) => f.name === filename && f.path !== action.path);
 	if (candidates.length === 0) return null;
 
@@ -63,6 +64,22 @@ export function detectMovedDestination(
 	return candidates[0]!.path;
 }
 
+/** Resolve held moves with one vault scan instead of one scan per deletion. */
+export function detectMovedDestinations(app: App, actions: readonly SyncAction[]): Map<string, string> {
+	const filesByName = new Map<string, TFile[]>();
+	for (const file of app.vault?.getFiles?.() ?? []) {
+		const files = filesByName.get(file.name) ?? [];
+		files.push(file);
+		filesByName.set(file.name, files);
+	}
+	const destinations = new Map<string, string>();
+	for (const action of actions) {
+		const destination = detectMovedDestination(app, action, filesByName);
+		if (destination) destinations.set(action.path, destination);
+	}
+	return destinations;
+}
+
 /**
  * Modal shown when SyncOrchestrator quarantines deletions because they exceed the safety limit.
  * Provides a rich interface to review, search, filter, copy, and approve held deletions.
@@ -72,6 +89,7 @@ export class DeletionReviewModal extends Modal {
 	private onApproved?: () => void;
 	private activeFilter: DeletionFilter = "all";
 	private searchQuery = "";
+	private page = 0;
 	private dynamicContainer: HTMLElement | null = null;
 	private pillElements: HTMLElement[] = [];
 	private moveMap = new Map<string, string>();
@@ -107,10 +125,7 @@ export class DeletionReviewModal extends Modal {
 			return;
 		}
 
-		for (const a of pending) {
-			const dest = detectMovedDestination(this.app, a);
-			if (dest) this.moveMap.set(a.path, dest);
-		}
+		this.moveMap = detectMovedDestinations(this.app, pending);
 
 		const movedDeletions = pending.filter((a) => this.moveMap.has(a.path));
 		const serverDeletions = pending.filter((a) => a.action === "delete_remote" && !this.moveMap.has(a.path));
@@ -180,6 +195,7 @@ export class DeletionReviewModal extends Modal {
 			this.pillElements.push(pill);
 			pill.addEventListener("click", () => {
 				this.activeFilter = f.id;
+				this.page = 0;
 				this.renderListSection(pending);
 			});
 		}
@@ -193,6 +209,7 @@ export class DeletionReviewModal extends Modal {
 		});
 		searchInput.addEventListener("input", (e) => {
 			this.searchQuery = (e.target as HTMLInputElement).value;
+			this.page = 0;
 			this.renderListSection(pending);
 		});
 
@@ -252,6 +269,22 @@ export class DeletionReviewModal extends Modal {
 		}
 
 		const filtered = this.getFilteredActions(pending);
+		const pageSize = 100;
+		const lastPage = Math.max(0, Math.ceil(filtered.length / pageSize) - 1);
+		this.page = Math.min(this.page, lastPage);
+		const start = this.page * pageSize;
+		if (filtered.length > pageSize) {
+			new Setting(this.dynamicContainer)
+				.setName(`Showing ${start + 1}–${Math.min(start + pageSize, filtered.length)} of ${filtered.length}`)
+				.addButton((btn) => btn.setButtonText("Previous").setDisabled(this.page === 0).onClick(() => {
+					this.page--;
+					this.renderListSection(pending);
+				}))
+				.addButton((btn) => btn.setButtonText("Next").setDisabled(this.page === lastPage).onClick(() => {
+					this.page++;
+					this.renderListSection(pending);
+				}));
+		}
 
 		// List container
 		const listContainer = this.dynamicContainer.createDiv("vaultbridge-deletion-list");
@@ -262,7 +295,7 @@ export class DeletionReviewModal extends Modal {
 				text: "No deletions match your search or filter.",
 			});
 		} else {
-			for (const action of filtered) {
+			for (const action of filtered.slice(start, start + pageSize)) {
 				const row = listContainer.createDiv("vaultbridge-deletion-row");
 				const dest = this.moveMap.get(action.path);
 				row.setAttribute("title", dest ? `${action.path} → ${dest}` : action.path);
@@ -302,7 +335,7 @@ export class DeletionReviewModal extends Modal {
 		const isSubset = filtered.length !== pending.length;
 		const allMoved = pending.length > 0 && pending.every((a) => this.moveMap.has(a.path));
 		const approveText = isSubset
-			? `Approve displayed deletions (${filtered.length})`
+			? `Approve matching deletions (${filtered.length})`
 			: allMoved
 			? `Approve all moves (${pending.length})`
 			: `Approve all deletions (${pending.length})`;

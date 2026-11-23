@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { groupPendingDeletions, detectMovedDestination, DeletionReviewModal, DirectDeleteConfirmModal } from "./deletion-modal";
+import { groupPendingDeletions, detectMovedDestination, detectMovedDestinations, DeletionReviewModal, DirectDeleteConfirmModal } from "./deletion-modal";
 import { VaultBridgeSettingTab } from "./settings";
+import type { App } from "obsidian";
+import type { SyncOrchestrator } from "../sync/orchestrator";
 import type { SyncAction } from "../sync/types";
-import { __ui, Notice, TFile, TFolder } from "../__mocks__/obsidian";
+import { __ui, FakeEl, Notice, TFile, TFolder } from "../__mocks__/obsidian";
 
 describe("groupPendingDeletions", () => {
 	it("groups paths by first two directory segments", () => {
@@ -20,11 +22,56 @@ describe("groupPendingDeletions", () => {
 	});
 });
 
+describe("detectMovedDestinations", () => {
+	it("scans the vault once for a large held batch and preserves size matching", () => {
+		const getFiles = vi.fn().mockReturnValue([
+			{ name: "note.md", path: "first/note.md", stat: { size: 1 } },
+			{ name: "note.md", path: "second/note.md", stat: { size: 4 } },
+		]);
+		const actions: SyncAction[] = Array.from({ length: 1000 }, (_, i) => ({
+			path: `old-${i}/note.md`, action: "delete_remote",
+			baseline: { localSize: 4 } as SyncAction["baseline"],
+		}));
+		const moves = detectMovedDestinations({ vault: { getFiles } } as unknown as App, actions);
+		expect(getFiles).toHaveBeenCalledTimes(1);
+		expect(moves.size).toBe(1000);
+		expect(moves.get("old-999/note.md")).toBe("second/note.md");
+	});
+});
+
 describe("DeletionReviewModal", () => {
 	beforeEach(() => {
 		__ui.buttons = [];
 		__ui.lastModal = null;
 		Notice.lastNotice = null;
+	});
+
+	it("paginates large batches while keeping approval scoped to the full matching set", async () => {
+		const pending: SyncAction[] = Array.from({ length: 250 }, (_, i) => ({
+			path: `old-${i}.md`, action: "delete_remote",
+		}));
+		const approvePendingDeletions = vi.fn().mockResolvedValue(undefined);
+		const modal = new DeletionReviewModal({} as App, {
+			getPendingDeletions: () => pending, approvePendingDeletions,
+		} as unknown as SyncOrchestrator);
+		modal.open();
+		const rows = (): string[] => {
+			const titles: string[] = [];
+			const visit = (el: FakeEl): void => {
+				if (el.cls === "vaultbridge-deletion-row") titles.push(el.getAttribute("title")!);
+				for (const child of el.children) visit(child);
+			};
+			visit(modal.contentEl as unknown as FakeEl);
+			return titles;
+		};
+		expect(rows()).toHaveLength(100);
+		expect(rows()[0]).toBe("old-0.md");
+		__ui.buttons[1]!.click();
+		expect(rows()).toHaveLength(100);
+		expect(rows()[0]).toBe("old-100.md");
+		// New page adds Previous, Next, Approve all, Decide later.
+		await Promise.resolve(__ui.buttons[6]!.click());
+		expect(approvePendingDeletions).toHaveBeenCalledWith(pending);
 	});
 
 	it("renders empty state when no deletions are pending", () => {

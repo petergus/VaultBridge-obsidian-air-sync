@@ -295,7 +295,7 @@ export class SyncOrchestrator {
 	async approvePendingDeletions(actionsToApprove?: readonly SyncAction[]): Promise<void> {
 		const target = actionsToApprove ?? this.pendingDeletions;
 		if (target.length === 0) return;
-		this.approvedDeletionKeys = new Set(target.map(deletionKey));
+		this.approvedDeletionKeys = new Set([...this.approvedDeletionKeys, ...target.map(deletionKey)]);
 		this.velocityTracker.reset();
 		this.deps.logger?.info("Held deletions approved", { count: this.approvedDeletionKeys.size });
 		await this.runSync();
@@ -618,6 +618,9 @@ export class SyncOrchestrator {
 			throw new Error("Cannot sync: local or remote filesystem is not available");
 		}
 		const settings = this.deps.getSettings();
+		// Capture approval before detection. An approval arriving during this cycle
+		// belongs to the queued cycle and must not be consumed by this one.
+		const approved = this.approvedDeletionKeys;
 
 		const changeSet = await collectChanges({
 			localFs,
@@ -632,7 +635,10 @@ export class SyncOrchestrator {
 			forceFullScan,
 			// Re-evaluate held deletions every cycle until they are approved or no longer
 			// planned — the delta cursor has already moved past remote-origin ones.
-			extraPaths: this.pendingDeletions.map((a) => a.path),
+			extraPaths: [
+				...this.pendingDeletions.map((a) => a.path),
+				...Array.from(approved, (key) => key.slice(key.indexOf("\u0000") + 1)),
+			],
 		});
 
 		const { renamePairs, folderRenamePairs } = snapshot;
@@ -723,7 +729,6 @@ export class SyncOrchestrator {
 		// are quarantined: the safe actions (pushes, pulls, merges) still execute this
 		// cycle, and the user is notified to approve the held deletions separately.
 		// Deletions the user already approved are neither counted nor held.
-		const approved = this.approvedDeletionKeys;
 		const isApproved = (a: SyncAction) => approved.has(deletionKey(a));
 		const unapprovedDeleteCount = plan.actions.filter((a) => isDeletionAction(a) && !isApproved(a)).length;
 		const velocityBlocked = unapprovedDeleteCount > 0 &&
@@ -783,7 +788,8 @@ export class SyncOrchestrator {
 
 		const result = await executePlan(executionPlan, ctx);
 		// The approval applied to the plan that just ran; later cycles are guarded again.
-		this.approvedDeletionKeys = new Set();
+		// Preserve approvals submitted while this cycle was detecting or executing.
+		if (this.approvedDeletionKeys === approved) this.approvedDeletionKeys = new Set();
 		const classifyError = (err: unknown) => provider?.classifyError?.(err) ?? classifyHttpError(err);
 		this.updateFailedActionTracker(settings.backendType, result, classifyError);
 
